@@ -1,0 +1,19 @@
+name: rlpomdp
+channels:
+  - defaults
+  - conda-forge
+  - glemaitre
+  - akode
+dependencies:
+  - python=3.6.8
+  - pip
+  - numpy=1.15.4
+  - scikit-learn=0.20.3
+  - ipykernel
+  - matplotlib
+  - seaborn
+  - jupyter
+  - gym
+  - pip:
+    - setuptools==40.6.3
+    - file:../custom_envs/gym-tiger
