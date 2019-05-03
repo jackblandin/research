@@ -1,90 +1,44 @@
-# System
-import sys
-import os
-from datetime import datetime
+# 3rd party
 import numpy as np
 
-# 3rd party
-import gym
-from gym import wrappers
-import matplotlib.pyplot as plt
-
 # Local
-from utils import plot_running_avg
-
-class FeatureTransformer:
-    def __init__(self, env):
-        # TODO
-        self.featurizer = None
-
-    def transform(self, observations):
-        return self.featurizer.transform(observations)
+from ..feature_transformers.simple import TigerFeatureTransformer
 
 
-class Model:
-    def __init__(self, env, feature_transformer):
+class QLearner:
+    def __init__(self, env, alpha=.1, gamma=.9):
         self.env = env
-        self.model = None
-        self.feature_transformer = feature_transformer
+        self.alpha = alpha
+        self.gamma = gamma
+        self.feature_transformer = TigerFeatureTransformer(env)
+        num_states = env.observation_space.n
+        num_actions = env.action_space.n
+        # axis0 is transformed observation, axis1 is action, value is Q value
+        self.Q = np.random.uniform(low=-1, high=1,
+                                   size=(num_states, num_actions))
 
-    def predict(self, s):
-        X = self.feature_transformer.transform(s)
-        return self.model.predict(X)
+    def predict(self, o):
+        """
+        Returns an array where index is an action, and values are the Q values
+        of taking that action.
+        """
+        o_trans = self.feature_transformer.transform(o)
+        return self.Q[o_trans]
 
-    def update(self, s, a, G):
-        # X = self.feature_transformer.transform(s)
-        # TODO
-        pass
+    def update(self, otm1, atm1, r, ot, at):
+        """
+        Performs TD(0) update on the Q value
+        """
+        otm1_trans = self.feature_transformer.transform(otm1)
+        ot_trans = self.feature_transformer.transform(ot)
+        G = r + self.gamma*self.Q[ot_trans, at]
+        self.Q[otm1_trans, atm1] += self.alpha*(G - self.Q[otm1_trans, atm1])
 
-    def sample_action(self, s, eps):
+    def sample_action(self, o, eps):
         if np.random.random() < eps:
             return self.env.action_space.sample()
         else:
-            return np.argmax(self.predict(s))
+            return self.best_action(o)
 
-
-def play_one(env, model, eps, gamma):
-    observation = env.reset()
-    done = False
-    totalreward = 0
-    iters = 0
-    while not done and iters < 2000:
-        # TODO
-        pass
-    return totalreward
-
-
-def main():
-    env = gym.make('CartPole-v0')
-    ft = FeatureTransformer(env)
-    model = Model(env, ft)
-    gamma = 0.99
-
-    if 'monitor' in sys.argv:
-        filename = os.path.basename(__file__).split('.')[0]
-        monitor_dir = './' + filename + '_' + str(datetime.now())
-        env = wrappers.Monitor(env, monitor_dir)
-
-    N = 500
-    totalrewards = np.empty(N)
-    for n in range(N):
-        eps = 1.0/np.sqrt(n+1)
-        totalreward = play_one(env, model, eps, gamma)
-        totalrewards[n] = totalreward
-        if n % 100 == 0:
-            print("episode:", n, "total reward:", totalreward, "eps:", eps,
-                  "avg reward (last 100):",
-                  totalrewards[max(0, n-100):(n+1)].mean())
-
-    print("avg reward for last 100 episodes:", totalrewards[-100:].mean())
-    print("total steps:", totalrewards.sum())
-
-    plt.plot(totalrewards)
-    plt.title("Rewards")
-    plt.show()
-
-    plot_running_avg(totalrewards)
-
-
-if __name__ == '__main__':
-    main()
+    def best_action(self, o):
+        return np.argmax(self.predict(o))
