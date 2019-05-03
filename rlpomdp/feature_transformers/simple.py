@@ -22,18 +22,21 @@ class TigerFeatureTransformer:
     def __init__(self, env):
         """
         Maps
-            [1, 0, 0] -> 0
-            [0, 1, 0] -> 1
-            [0, 0, 1] -> 2
+            [1, 0, 0, 0] -> 0
+            [0, 1, 0, 0] -> 1
+            [0, 0, 1, 0] -> 2
+            [0, 0, 0, 1] -> 3
         """
         pass
 
     def transform(self, o):
-        if o == [1, 0, 0]:
+        if o == [1, 0, 0, 0]:
             return 0
-        elif o == [0, 1, 0]:
+        elif o == [0, 1, 0, 0]:
             return 1
-        elif o == [0, 0, 1]:
+        elif o == [0, 0, 1, 0]:
             return 2
+        elif o == [0, 0, 0, 1]:
+            return 3
         else:
             raise ValueError('Invalid observation: '.format(o))

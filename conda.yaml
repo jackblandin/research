@@ -16,4 +16,4 @@ dependencies:
   - gym
   - pip:
     - setuptools==40.6.3
-    - file:../custom_envs/gym-tiger
+    - git+https://github.com/jackblandin/gym-tiger.git

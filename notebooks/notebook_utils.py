@@ -11,5 +11,5 @@ def reload_module_by_name(mod_name, var_name):
         if mod_name in mod:
             del sys.modules[mod]
     if var_name in globals():
-        del globals()[var_name] # deletes the variable named <var_name>
+        del globals()[var_name]  # deletes the variable named <var_name>
     return importlib.__import__(mod_name)
