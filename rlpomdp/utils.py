@@ -3,6 +3,27 @@ import matplotlib.pyplot as plt
 
 
 def play_one(env, model, eps, max_iters=10, verbose=False):
+    """
+    Plays one episode in the environment using the model.
+
+    Parameters
+    ----------
+    env : gym.Env
+        OpenAI Gym environment.
+    model : object
+        RL model (e.g. QLearner).
+    eps : float
+        Epsilon for epsilon-greedy strategy.
+    max_iters : int
+        Max number of steps before the episode forces termination.
+    verbose : boolean
+        Whether or not to print out additional debugging info.
+
+    Returns
+    -------
+    float
+        Total reward accumulated during episode.
+    """
     ot = env.reset()
     done = False
     total_episode_reward = 0
@@ -29,6 +50,22 @@ def play_one(env, model, eps, max_iters=10, verbose=False):
 
 
 def plot_running_avg(totalrewards, figsize=(20, 5)):
+    """
+    Plots the total reward running average.
+
+    Parameters
+    ----------
+    totalrewards : list or array-like
+        Array where index is episode number and value is total rewards
+        accumulated during the episode.
+
+    figsize : tuple (length two)
+        Width, height of the figure displaying the running average.
+
+    Returns
+    -------
+    None
+    """
     N = len(totalrewards)
     running_avg = np.empty(N)
     for t in range(N):
