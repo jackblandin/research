@@ -29,9 +29,9 @@ def play_one(env, model, eps, max_iters=10, verbose=False):
     total_episode_reward = 0
     iters = 0
     if verbose:
-        print('{:<11} | {:<10} | {:<5} | {:<11} | {:<10}'.format(
-                'o_t-1', 'a_t-1', 'r', 'o_t', 'a_t'))
-        print('-'*55)
+        print('{:<40} | {:<11} | {:<10} | {:<5} | {:<11} | {:<10}'.format(
+            'o_t-n,...,o_t-1', 'o_t-1', 'a_t-1', 'r', 'o_t', 'a_t'))
+        print('-'*100)
     while not done and iters < max_iters:
         otm1 = ot
         atm1 = model.sample_action(otm1, eps)
@@ -44,8 +44,13 @@ def play_one(env, model, eps, max_iters=10, verbose=False):
             _atm1 = env.translate_action(atm1)
             _ot = env.translate_obs(ot)
             _at = env.translate_action(at)
-            print('{:<11} | {:<10} | {:<5} | {:<11} | {:<10}'.format(
-                _otm1, _atm1, r, _ot, _at))
+            if hasattr(model, 'last_n_obs'):
+                _last_n_obs = str(
+                    [env.translate_obs(o) for o in model.last_n_obs])
+            else:
+                _last_n_obs = ''
+            print('{:<40} | {:<11} | {:<10} | {:<5} | {:<11} | {:<10}'.format(
+                _last_n_obs, _otm1, _atm1, r, _ot, _at))
     return total_episode_reward
 
 

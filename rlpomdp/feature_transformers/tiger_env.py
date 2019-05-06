@@ -1,5 +1,6 @@
 import gym
 import numpy as np
+from itertools import product
 
 
 class ObservationAsStatesTransformer:
@@ -51,7 +52,7 @@ class ObservationAsStatesTransformer:
 
 class SeqArrayToSortedStringTransformer:
 
-    def __init__(self, env, seq_len=3):
+    def __init__(self, env, seq_len):
         """
         Takes all possible combinations of observation sequences of length
         seq_len and transforms them into a flattened string, then stores these
@@ -76,14 +77,23 @@ class SeqArrayToSortedStringTransformer:
             OpenAI Gym environment.
         seq_len : int
             Number of sequential observations to use as the state.
+
+
+        Attributes
+        ----------
+        _lookup : dict
+            Mapping between raw state sequence to an int representation.
+        _reverse_lookup : dict
+            Inverse of _lookup. Used for verbose output.
         """
         if not isinstance(env.observation_space, gym.spaces.discrete.Discrete):
             raise ValueError('SeqArrayToSortedStringTransformer only works \
                              for Discrete spaces.')
-        # generate all possible combos of length seq_len
-        all_combos = _all_combos(env.observation_space.n, seq_len)  # TODO
-        all_combos = all_combos.sort()
-        self.lookup = {all_combos[i]: i for i in range(len(all_combos))}
+        # generate all possible permutations of length seq_len
+        all_perms = _all_perms(env.observation_space.n, seq_len)
+        all_perms.sort()
+        self._lookup = {all_perms[i]: i for i in range(len(all_perms))}
+        self._reverse_lookup = {i: all_perms[i] for i in range(len(all_perms))}
 
     def transform(self, observations_seq):
         """
@@ -99,13 +109,24 @@ class SeqArrayToSortedStringTransformer:
         int
             Discrete state value.
         """
+        observations_seq = np.asarray(
+            [np.asarray(o) for o in observations_seq])
         seq_str = ''.join(map(lambda f: str(int(f)), np.ndarray.flatten(
-            observations_seq)))
-        return self.lookup[seq_str]
+            np.asarray(observations_seq))))
+        return self._lookup[seq_str]
 
 
-def _all_combos(num_obs, seq_len):
+def _all_perms(num_obs, seq_len):
     """
+    Generates all possible permuation subsequences (with replacement) of length
+    1 to seq_len of in the range (0, num_obs-1).
+
+    Examples
+    --------
+    >>> _all_perms(3, 2)
+    array(['', '100', '010', '001', '100100', '100010', '100001', '010100',
+        '010010', '010001', '001100', '001010', '001001'], dtype='<U6')
+
     Parameters
     ----------
     num_obs : int
@@ -115,8 +136,25 @@ def _all_combos(num_obs, seq_len):
 
     Returns
     -------
-    list
-        Array of strings where each string represents a distinct observation
-        sequence.
+    array of arrays (numpy)
+        Arary of arrays of strings where each string represents a distinct
+        observation sequence.
     """
-    # TODO
+    permutations = []
+    all_uniq_obs = []
+    for i in range(num_obs):
+        uniq_obs = np.asarray([0 for j in range(num_obs)])
+        uniq_obs[i] = 1
+        all_uniq_obs.append(uniq_obs)
+
+    all_uniq_obs = np.asarray(all_uniq_obs)
+
+    for L in range(0, seq_len+1):
+        for subset in product(all_uniq_obs, repeat=L):
+            flattened_seq = np.ndarray.flatten(np.array(subset))
+            seq_str = ','.join(flattened_seq.astype(str)).replace(',', '')
+            permutations.append(seq_str)
+
+    permutations = np.asarray(permutations)
+
+    return permutations
