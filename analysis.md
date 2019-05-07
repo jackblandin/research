@@ -1,6 +1,6 @@
 ## QLearner
-##### 05/07/2019
-##### notebook: `notebooks/tiger_env/qlearner.ipynb`
+* 05/07/2019
+* notebook: notebooks/tiger_env/qlearner.ipynb
 
 The final Q values are:
 
@@ -65,8 +65,8 @@ END:                 0.32 |      -0.96 |   0.54
 
 
 ## QLearnerSeq
-##### 05/07/2019
-##### notebook: `notebooks/tiger_env/qlearner-seq.ipynb`
+* 05/07/2019
+* notebook: notebooks/tiger_env/qlearner-seq.ipynb
 
 As expected, as we increase the number of observation sequences in memory, the performance improves:
 
