@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def play_one(env, model, eps, max_iters=10, verbose=False):
+def play_one(env, model, eps, max_steps=10, verbose=False):
     """
     Plays one episode in the environment using the model.
 
@@ -14,7 +14,7 @@ def play_one(env, model, eps, max_iters=10, verbose=False):
         RL model (e.g. QLearner).
     eps : float
         Epsilon for epsilon-greedy strategy.
-    max_iters : int
+    max_steps : int
         Max number of steps before the episode forces termination.
     verbose : boolean
         Whether or not to print out additional debugging info.
@@ -32,7 +32,7 @@ def play_one(env, model, eps, max_iters=10, verbose=False):
         print('{:<40} | {:<11} | {:<10} | {:<5} | {:<11} | {:<10}'.format(
             'o_t-n,...,o_t-1', 'o_t-1', 'a_t-1', 'r', 'o_t', 'a_t'))
         print('-'*100)
-    while not done and iters < max_iters:
+    while not done and iters < max_steps:
         otm1 = ot
         atm1 = model.sample_action(otm1, eps)
         ot, r, done, info = env.step(atm1)
@@ -51,6 +51,7 @@ def play_one(env, model, eps, max_iters=10, verbose=False):
                 _last_n_obs = ''
             print('{:<40} | {:<11} | {:<10} | {:<5} | {:<11} | {:<10}'.format(
                 _last_n_obs, _otm1, _atm1, r, _ot, _at))
+        iters += 1
     return total_episode_reward
 
 
