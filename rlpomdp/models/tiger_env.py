@@ -8,7 +8,7 @@ from ..feature_transformers.tiger_env import (
 
 class QLearner:
 
-    def __init__(self, env, alpha=.1, gamma=.9):
+    def __init__(self, env, initial_alpha=.1, gamma=.9, alpha_decay=0):
         """
         Simple Q Learner with just observations as states. The action is
         associated with the last observation.
@@ -17,20 +17,38 @@ class QLearner:
         ----------
         env : gym.Env
             OpenAI Gym environment
-        alpha : float
+        initial_alpha : float
             Learning rate.
         gamma : float
             Discount factor.
+        alpha_decay : float, default 0
+            Learning rate alpha will decay at 1/_n_updates**_alpha_decay.
+
+
+        Attributes
+        ----------
+        feature_transformer : object
+            Transforms raw state into representation, usually a reduced one.
+        Q : 2D numpy array
+            Q <state,value> matrix where
+                - axis0 index is transformed observation
+                - axis1 index is action
+                - value is Q value.
+            E.g. Q[1][2] represents the Q value for taking action 2 in
+            (transformed) state 1.
+        _n_updates : int
+            Number of updates made to Q matrix.
         """
         self.env = env
-        self.alpha = alpha
+        self.initial_alpha = initial_alpha
         self.gamma = gamma
+        self._alpha_decay = alpha_decay
         self.feature_transformer = ObservationAsStatesTransformer(env)
         num_states = env.observation_space.n
         num_actions = env.action_space.n
-        # axis0 is transformed observation, axis1 is action, value is Q value
-        self.Q = np.random.uniform(low=-1, high=1,
+        self.Q = np.random.uniform(low=0, high=0,
                                    size=(num_states, num_actions))
+        self._n_updates = 0
 
     def predict(self, o):
         """
@@ -72,7 +90,9 @@ class QLearner:
         otm1_trans = self.feature_transformer.transform(otm1)
         ot_trans = self.feature_transformer.transform(ot)
         G = r + self.gamma*self.Q[ot_trans, at]
-        self.Q[otm1_trans, atm1] += self.alpha*(G - self.Q[otm1_trans, atm1])
+        alpha = self.initial_alpha / (self._n_updates+1)**self._alpha_decay
+        self.Q[otm1_trans, atm1] += alpha*(G - self.Q[otm1_trans, atm1])
+        self._n_updates += 1
 
     def sample_action(self, o, eps):
         """
@@ -115,7 +135,8 @@ class QLearner:
 
 class QLearnerSeq:
 
-    def __init__(self, env, alpha=.1, gamma=.9, seq_len=3):
+    def __init__(self, env, initial_alpha=.1, gamma=.9, alpha_decay=0,
+                 seq_len=3):
         """
         Started 05/04/2019
         Q Learner with all combinations of seq_len observations as state space.
@@ -124,16 +145,37 @@ class QLearnerSeq:
         ----------
         env : gym.Env
             OpenAI Gym environment.
-        alpha : float
+        initial_alpha : float
             Learning rate.
         gamma : float
             Discount factor.
+        alpha_decay : float, default 0
+            Learning rate alpha will decay at 1/_n_updates**_alpha_decay.
         seq_len : int
             Number of sequential observations to use as the state.
+
+        Attributes
+        ----------
+        feature_transformer : object
+            Transforms raw state into representation, usually a reduced one.
+        Q : 2D numpy array
+            Q <state,value> matrix where
+                - axis0 index is transformed observation
+                - axis1 index is action
+                - value is Q value.
+            E.g. Q[1][2] represents the Q value for taking action 2 in
+            (transformed) state 1.
+        _n_updates : int
+            Number of updates made to Q matrix.
+        last_n_obs : list
+            A sequence of the most recent <seq_len> raw observations.
+            TODO 05/09/2019 - Could improve this by only storing *transformed*
+            observations.
         """
         self.env = env
-        self.alpha = alpha
+        self.initial_alpha = initial_alpha
         self.gamma = gamma
+        self._alpha_decay = alpha_decay
         self.seq_len = seq_len
         self.feature_transformer = SeqArrayToSortedStringTransformer(
             env, seq_len=seq_len)
@@ -148,6 +190,7 @@ class QLearnerSeq:
         self.Q = np.random.uniform(low=0, high=0,
                                    size=(num_states, num_actions))
         # self.Q[:, 2] = 1  # Optimistic value for listening
+        self._n_updates = 0
         self.last_n_obs = []
 
     def predict(self, o):
@@ -207,10 +250,14 @@ class QLearnerSeq:
         g_last_n_obs.append(ot)
         g_last_n_obs_trans = self.feature_transformer.transform(g_last_n_obs)
 
+        # Compute alpha (if there's nonzero alpha decay)
+        alpha = self.initial_alpha / (self._n_updates+1)**self._alpha_decay
+
         # TD(0) update using observation sequences as states
         G = r + self.gamma*self.Q[g_last_n_obs_trans, at]
-        self.Q[last_n_obs_trans, atm1] += self.alpha*(
+        self.Q[last_n_obs_trans, atm1] += alpha*(
             G - self.Q[last_n_obs_trans, atm1])
+        self._n_updates += 1
 
     def sample_action(self, o, eps):
         if np.random.random() < eps:
