@@ -1,4 +1,4 @@
-## QLearner
+# QLearner
 * 05/07/2019
 * notebook: notebooks/tiger_env/qlearner.ipynb
 
@@ -63,8 +63,143 @@ END:                 0.32 |      -0.96 |   0.54
 
 **OPEN QUESION** - Whey don't we see above hypothesis happening?
 
+### Why don't Q values converge to actual expected values/How do alpha and gamma effect converged Q values?
 
-## QLearnerSeq
+One interesting point of observation is to notice that the final Q values are dependent on how `alpha` and `gamma` are set. To understand how these values influnce the final Q values, we can look at the TD(0) update and then an example. For simplicity's sake, assume that we have a fixed policy and are updating the Q values according to the policy.
+
+```
+Q[s0,a] = Q[s0,a0]  + a*( g*(r  + Q[s1,a1])     - Q[s0,a0] )
+        = Q[s0,a0]  + a*(g*r    + g*Q[s1,a1]    - Q[s0,a0] )
+        = Q[s0,a0]  + a*g*r     + a*g*Q[s1,a1]  - a*Q[s0,a0]
+```
+
+Suppose we are starting with all zero Q values.
+
+```
+                OPEN LEFT | OPEN RIGHT | LISTEN
+                --------- | ---------- | ------
+GROWL LEFT              0 |          0 |      0
+GROWL RIGHT:            0 |          0 |      0
+START:                  0 |          0 |      0
+END:                    0 |          0 |      0
+```
+
+Our fixed policy says to choose LISTEN for the START observation, so we choose LISTEN as our initial action and receive observation GL. Then our first belief update is
+
+```
+Q[St, L] = Q[St,L]  + a*g*-1    + a*g*Q[GL,OL])     - a*Q[St,L] )
+          = 0       + -1*a*g    + a*g*0             - a*0
+          = -1*a*g
+```
+
+Note: Our fixed policy says to take action OL when receiving observation GL.
+
+Then, our updated Q values are
+
+```
+                OPEN LEFT | OPEN RIGHT | LISTEN
+                --------- | ---------- | ------
+GROWL LEFT              0 |          0 |      0
+GROWL RIGHT:            0 |          0 |      0
+START:                  0 |          0 | -1*a*g
+END:                    0 |          0 |      0
+
+Q[GL, OL] = Q[GL,OL]  + a*g*-100    + a*g*Q[E,*])   - a*Q[GL,OL] )  # action irrelevant
+          = 0         + -100*a*g      + a*g*0         - a*0
+          = -100*a*g
+
+
+                OPEN LEFT | OPEN RIGHT | LISTEN
+                --------- | ---------- | ------
+GROWL LEFT       -100*a*g |          0 |      0
+GROWL RIGHT:            0 |          0 |      0
+START:                  0 |          0 | -1*a*g
+END:                    0 |          0 |      0
+```
+
+Now we restart a new episode and again choose to LISTEN
+
+```
+Q[St, L]  = Q[St,L] + a*g*-1    + a*g*Q[GL,OL])     - a*Q[St,L]
+          = -1*a*g  + -1*a*g    + a*g*(-100*a*g)    - a*(-1*a*g)
+          = -1*a*g  + -1*a*g    + -100*a^2*g^2      - -1*a^2*g
+          = -2*a*g              - 100*a^2*g^2       + a^2*g
+
+
+                OPEN LEFT | OPEN RIGHT | LISTEN
+                --------- | ---------- | ------
+GROWL LEFT       -100*a*g |          0 |      0
+GROWL RIGHT:            0 |          0 |      0
+START:                  0 |          0 | -2*a*g - 100*a^2*g^2 + a^2*g
+END:                    0 |          0 |      0
+```
+
+and again we receive TL and take action OL (environment is conveniently redundant)
+
+```
+
+Q[GL, OL] = Q[GL,OL]  + a*g*-100    + a*g*Q[E,*])   - a*Q[GL,OL] )  # action irrelevant
+          = -100*a*g  + -100*a*g      + a*g*0       - -100*a^2*g
+          = -200*a*g + 100*a^2*g
+
+
+                           OPEN LEFT | OPEN RIGHT | LISTEN
+                           --------- | ---------- | ------
+GROWL LEFT      -200*a*g + 100*a^2*g |          0 |      0
+GROWL RIGHT:                       0 |          0 |      0
+START:                             0 |          0 | -2*a*g - 100*a^2*g^2 + a^2*g
+END:                               0 |          0 |      0
+```
+
+and we repeat the whole episode process once more
+
+```
+Q[St, L]  = Q[St,L] + a*g*-1    + a*g*Q[GL,OL])     - a*Q[St,L]
+          = -2*a*g - 100*a^2*g^2 + a^2*g  + -1*a*g    + a*g*(-200*a*g)    - -2*a^2*g - 100*a^3*g^2 + a^3*g
+          = -2*a*g - 100*a^2*g^2 + a^2*g  + -1*a*g    + -200*a^2*g^2      +2*a^2*g - 100*a^3*g^2 + a^3*g
+
+                           OPEN LEFT | OPEN RIGHT | LISTEN
+                           --------- | ---------- | ------
+GROWL LEFT      -200*a*g + 100*a^2*g |          0 |      0
+GROWL RIGHT:                       0 |          0 |      0
+START:                             0 |          0 | -2*a*g - 100*a^2*g^2 + a^2*g  + -1*a*g    + -200*a^2*g^2      +2*a^2*g - 100*a^3*g^2 + a^3*g
+END:                               0 |          0 |      0
+
+
+Q[GL, OL] = Q[GL,OL]  + a*g*-100    + a*g*Q[E,*])   - a*Q[GL,OL] )  # action irrelevant
+          = -200*a*g + 100*a^2*g  + -100*a*g      + a*g*0       +200*a^2*g + 100*a^3*g
+          = -300*a*g + 100*a^2*g  +200*a^2*g + 100*a^3*g
+
+
+                                                              OPEN LEFT | OPEN RIGHT | LISTEN
+                                                              --------- | ---------- | ------
+GROWL LEFT       -200*a*g + 100*a^2*g  - 100*a*g +200*a^2*g + 100*a^3*g |          0 |      0
+GROWL RIGHT:                                                          0 |          0 |      0
+START:                                                                0 |          0 | -2*a*g - 100*a^2*g^2 + a^2*g
+END:                                                                  0 |          0 |      0
+```
+
+Now let's plugin values for `a` and `g` to see how this looks. Let `a = .1`, and `g = .9`.
+
+```
+                                                              OPEN LEFT | OPEN RIGHT | LISTEN
+                                                              --------- | ---------- | ------
+GROWL LEFT       -18+ 100*a^2*g  - 100*a*g +200*a^2*g + 100*a^3*g |          0 |      0
+GROWL LEFT: -200 + .9 - 9 + 1.8 +.09 =
+GROWL RIGHT:                                                          0 |          0 |      0
+START:                                                                0 |          0 | -2*a*g - 100*a^2*g^2 + a^2*g
+END:                                                                  0 |          0 |      0
+```
+
+For the OL update, since next state is always 0, the update is simply
+```
+Q[s0,a] = Q[s0,a0]  + a*( g*(r  + Q[s1,a1])     - Q[s0,a0] )
+        = Q[s0,a0] + a*g*r - a*Q[s0,a0]
+```
+So it does not depned on `g` at all. But if `a` is larger, and we assume that Q[GL,OL) is monotonically increasing in magnitude (which it is due to the fixed policy), then we see that the update (the right two terms) become... I think it will oscilate between smaller and smaller positive and negative value??? TODO: TEST IT OUT USING A FIXED POLICY
+If each update decreases in magnitude, then a larger alpha will allow for larger initial udpates, which should result in larger magnitudes of Q values. One might argue that if alpha is larger, then the subsequent negative updates will also be larger. This is true, but I think that the larger alpha will still leave a bigger gap.
+
+# QLearnerSeq
 * 05/07/2019
 * notebook: notebooks/tiger_env/qlearner-seq.ipynb
 
@@ -80,3 +215,4 @@ sequence length | avg reward after policy convergence
 6 | -2.4601
 
 **OPEN QUESTION** - why does performance start to decrease at seq length = 4?
+
