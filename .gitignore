@@ -1,3 +1,4 @@
 .ipynb_checkpoints/
 *.pyc
 experiments/**/logs/*
+*/**/data/**/*.csv
