@@ -2,9 +2,119 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+class Activation:
+
+    def __init__(self):
+        """
+        Activation function used in a FeedForward neural network.
+        """
+        pass
+
+    def forward(self, A):
+        """
+        Computes forward activation function.
+        """
+        raise NotImplementedError()
+
+    def back(self, X):
+        """
+        Computes derivative of loss function activation function w.r.t.
+        activation function for a particular layer.
+        """
+        raise NotImplementedError()
+
+
+class Sigmoid(Activation):
+
+    def __init__(self):
+        """
+        Sigmoid activation function used in a FeedForward neural network.
+        """
+        pass
+
+    def forward(self, A):
+        """
+        Computes activation of a single layer.
+
+        Parameters
+        ----------
+        A : np.ndarray, shape (N, M[i])
+            Input into activation func. at layer i: (Z.dot(W)+b).
+
+        Returns
+        -------
+        np.ndarray, shape (N, M[i])
+        """
+        _Z = 1 / (1 + np.exp(-A))
+        return _Z
+
+    def back(self, _Z):
+        """
+        Computes partial derivative of loss function w.r.t. activation
+        function for a particular layer.
+
+        Parameters
+        ----------
+        Z : np.ndarray, shape(N, M[i])
+            Output of layer i.
+
+        Returns
+        -------
+        np.ndarray, shape(N, M[i])
+            Partial derivative of loss function w.r.t. activation function
+            at layer i.
+        """
+        dZ = _Z*(1-_Z)
+        return dZ
+
+
+class RelU(Activation):
+
+    def __init__(self):
+        """
+        RelU activation function used in a FeedForward neural network.
+        """
+        pass
+
+    def forward(self, A):
+        """
+        Computes activation of a single layer.
+
+        Parameters
+        ----------
+        A : np.ndarray, shape (N, M[i])
+            Input into activation func. at layer i: (Z.dot(W)+b).
+
+        Returns
+        -------
+        np.ndarray, shape (N, M[i])
+        """
+        _Z = A * (A > 0)
+        return _Z
+
+    def back(self, _Z):
+        """
+        Computes partial derivative of loss function w.r.t. activation
+        function for a particular layer.
+
+        Parameters
+        ----------
+        Z : np.ndarray, shape(N, M[i])
+            Output of layer i.
+
+        Returns
+        -------
+        np.ndarray, shape(N, M[i])
+            Partial derivative of loss function w.r.t. activation function
+            at layer i.
+        """
+        dZ = np.piecewise(_Z, [_Z < .5, _Z >= .5], [0, 1])
+        return dZ
+
+
 class FeedForward:
 
-    def __init__(self, D, hidden_layer_sizes, K, learning_rate=1e-3):
+    def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5):
         """
         Feed forward neural network implemented with NumPy. Uses tanh as the
         activation function. Uses gradient ascent.
@@ -17,6 +127,8 @@ class FeedForward:
             Hidden layer sizes. An array of integers.
         K : int
             Number of output classes.
+        Z : Activation
+            Activation function.
         learning_rate : numeric
             Learning rate.
 
@@ -38,12 +150,14 @@ class FeedForward:
         >>> D = X_train.shape[1]
         >>> K = Y_train.shape[0]
         >>> hidden_layer_sizes = [5, 5]
-        >>> model = FeedForward(D, hidden_layer_sizes, K)
+        >>> Z = Sigmoid()
+        >>> model = FeedForward(D, hidden_layer_sizes, K, Z)
         >>> model.fit(X_train, Y_train)
         >>> preds, _ = model.forward(X_test)
         """
         self.D = D
         self.K = K
+        self.Z = Z
         self.learning_rate = learning_rate
         self.n_layers_ = len(hidden_layer_sizes)
         self.M = [D] + hidden_layer_sizes + [K]
@@ -118,7 +232,7 @@ class FeedForward:
 
         costs = []
         for epoch in range(epochs):
-            Output, Z = self.forward(X)
+            Output, _Z = self.forward(X)
             if epoch % (epochs / 10) == 0:
                 c = self._cost(T, Output)
                 P = np.argmax(Output, axis=1)
@@ -135,10 +249,10 @@ class FeedForward:
                 if i == n_layers:
                     Delta[i] = T - Output
                 else:
-                    Delta[i] = self._backprop_delta(Delta[i+1], W[i+1], Z[i+1],
-                                                    i)
+                    Delta[i] = self._backprop_delta(Delta[i+1], W[i+1],
+                                                    _Z[i+1], i)
 
-                dJdW_i = self._dJdW(Z[i], Delta[i], i)
+                dJdW_i = self._dJdW(_Z[i], Delta[i], i)
                 dJdb_i = self._dJdb(Delta[i], i)
 
                 W[i] += learning_rate * dJdW_i
@@ -173,34 +287,13 @@ class FeedForward:
         M = self.M
         W = self.W
         b = self.b
+        Z = self.Z
         assert prev_Z.shape == (N, M[i-1])
         A = prev_Z.dot(W[i-1]) + b[i-1]
         assert A.shape == (N, M[i])
-        Z = self._activation(A, i)
-        assert Z.shape == (N, M[i])
-        return Z
-
-    def _activation(self, A, i):
-        """
-        Computes activation (tanh) of a single layer.
-
-        Parameters
-        ----------
-        A : np.ndarray, shape (N, M[i])
-            Input into activation func. at layer i: (Z.dot(W)+b).
-        i : int
-            Index of hidden layer. Note that X is the zeroth hidden layer.
-
-        Returns
-        -------
-        np.ndarray, shape (N, M[i])
-        """
-        N = len(A)
-        M = self.M
-        assert A.shape == (N, M[i])
-        Z = 1 / (1 + np.exp(-A))
-        assert Z.shape == (N, M[i])
-        return Z
+        _Z = Z.forward(A)
+        assert _Z.shape == (N, M[i])
+        return _Z
 
     def _to_indicator_matrix(self, x, n_distinct):
         """
@@ -268,7 +361,7 @@ class FeedForward:
                 n_correct += 1
         return float(n_correct) / n_total
 
-    def _backprop_delta(self, subs_Delta, subs_W, Z, i):
+    def _backprop_delta(self, subs_Delta, subs_W, _Z, i):
         """
         Computes the delta for computing weight update.
 
@@ -278,10 +371,10 @@ class FeedForward:
             Delta at subsequent layer (i+1).
         subs_W : np.ndarray, shape (M[i+1], M[i+2])
             Weights at subsequent layer (i+1).
-        Z : np.ndarray, shape (N, M[i+1])
-            Layer outputs at current layer. Note that Z[i] comes BEFORE W[i],
-            since we set Z[0] to X. Therefore, the Z index for the ith layer is
-            Z[i+1].
+        _Z : np.ndarray, shape (N, M[i+1])
+            Layer outputs at current layer. Note that _Z[i] comes BEFORE W[i],
+            since we set _Z[0] to X. Therefore, the Z index for the ith layer
+            is Z[i+1].
         i : int
             Index of hidden layer.
 
@@ -291,43 +384,13 @@ class FeedForward:
             Delta of layer i.
         """
         M = self.M
-        N = len(Z)
+        N = len(_Z)
+        Z = self.Z
         assert subs_Delta.shape == (N, M[i+2])
         assert subs_W.shape == (M[i+1], M[i+2])
-        assert Z.shape == (N, M[i+1])
-        dJdZ = self._dJdZ(Z, i)
+        assert _Z.shape == (N, M[i+1])
+        dJdZ = Z.back(_Z)
         ret = (subs_Delta.dot(subs_W.T))*dJdZ
-        assert ret.shape == (N, M[i+1])
-        return ret
-
-    def _dJdZ(self, Z, i):
-        """
-        Computes partial derivative of loss function w.r.t. Z at layer i.
-
-        Parameters
-        ----------
-        Z : np.ndarray, shape(N, M[i])
-            Output of layer i.
-        i : int
-            Hidden layer index.
-
-        Returns
-        -------
-        np.ndarray, shape(N, M[i])
-            Partial derivative of loss function w.r.t. Z at layer i.
-
-        NOTE
-        ----
-        For now, this assumes activation function is tanh.
-
-        TODO
-        ----
-        Generalize for all types of activation functions.
-        """
-        M = self.M
-        N = len(Z)
-        assert Z.shape == (N, M[i+1])
-        ret = Z*(1-Z)
         assert ret.shape == (N, M[i+1])
         return ret
 
