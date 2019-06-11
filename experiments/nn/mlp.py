@@ -6,7 +6,7 @@ class Activation:
 
     def __init__(self):
         """
-        Activation function used in a FeedForward neural network.
+        Activation function used in a MLP neural network.
         """
         pass
 
@@ -28,7 +28,7 @@ class Sigmoid(Activation):
 
     def __init__(self):
         """
-        Sigmoid activation function used in a FeedForward neural network.
+        Sigmoid activation function used in a MLP neural network.
         """
         pass
 
@@ -68,11 +68,11 @@ class Sigmoid(Activation):
         return dZ
 
 
-class RelU(Activation):
+class ReLU(Activation):
 
     def __init__(self):
         """
-        RelU activation function used in a FeedForward neural network.
+        ReLU activation function used in a MLP neural network.
         """
         pass
 
@@ -89,7 +89,8 @@ class RelU(Activation):
         -------
         np.ndarray, shape (N, M[i])
         """
-        _Z = A * (A > 0)
+        _Z = A * (A > .5)
+        assert not np.any(np.isnan(_Z))
         return _Z
 
     def back(self, _Z):
@@ -112,12 +113,11 @@ class RelU(Activation):
         return dZ
 
 
-class FeedForward:
+class MLP:
 
     def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5):
         """
-        Feed forward neural network implemented with NumPy. Uses tanh as the
-        activation function. Uses gradient ascent.
+        Multip Layer Perceptron neural network implemented with NumPy. Uses gradient ascent.
 
         Parameters
         ----------
@@ -191,22 +191,39 @@ class FeedForward:
         n_layers = self.n_layers_
         W = self.W
         b = self.b
+        K = self.K
+        N = X.shape[0]
+
         # Collect Z at each layer so we can use them in backprop.
         Z = [None for i in range(n_layers+2)]
         Z[0] = X.copy()
+
         for i in range(1, self.n_layers_+1):
             Z[i] = self._forward_single_layer(Z[i-1], i)
+            assert not np.any(np.isnan(Z[i]))
+
         final_A = Z[-2].dot(W[n_layers]) + b[n_layers]
+        assert not np.any(np.isnan(final_A))
+
         # Compute softmax
+        # Normalize inputs first
+        final_A_mean = np.stack((final_A.mean(axis=1),) * K, axis=-1)
+        final_A_std = np.stack((final_A.std(axis=1),) * K, axis=-1)
+        final_A = (final_A - final_A_mean) / final_A_std
         expA = np.exp(final_A)
+        assert not np.any(np.isnan(expA))
+
         Y = expA / expA.sum(axis=1, keepdims=True)
-        Z[-1] = Y
-        N = X.shape[0]
         assert Y.shape == (N, self.K)
+        assert not np.any(np.isnan(Y))
+
+        Z[-1] = Y
         assert len(Z) == n_layers + 2
+        assert not np.any(np.isnan(Z[-1]))
+
         return Y, Z
 
-    def fit(self, X, Y, epochs=1000):
+    def fit(self, X, Y, epochs=1000, batch_size=1000):
         """
         Fits the neural network using backpropagation.
 
@@ -217,6 +234,8 @@ class FeedForward:
         Y : array-like, shape (N,)
             Vector of targets. This will be transformed into a onehot encoded
             indicator matrix, called T.
+        batch_size : int, default=1000
+            Training batch size. If batch_size > len(X), then the batch size will be changed to len(X).
         epochs : int
             Number of epochs.
 
@@ -230,38 +249,56 @@ class FeedForward:
 
         T = self._to_indicator_matrix(Y, K)
 
+        if batch_size > len(X):
+            print('WARNING: Batch size > len(X). Setting batch size to len(X)')
+            batch_size = len(X)
+        n_batches = int(len(X) / batch_size)
         costs = []
+        classification_rates = []
+
         for epoch in range(epochs):
-            Output, _Z = self.forward(X)
-            if epoch % (epochs / 10) == 0:
-                c = self._cost(T, Output)
-                P = np.argmax(Output, axis=1)
+            _Output = np.empty_like(T)  #  Aggregate Output for entire epoch
+
+            for b in range(n_batches):
+                lower_idx = b*batch_size
+                upper_idx = (b+1)*batch_size
+                if upper_idx > len(X):
+                    upper_idx = len(X) - 1
+                X_batch = X[lower_idx:upper_idx, :]
+                Output, _Z = self.forward(X_batch)
+                _Output[lower_idx:upper_idx] = Output
+
+                # this is gradient ASCENT, not DESCENT
+                Delta = [None for i in range(n_layers+1)]
+                for i in range(n_layers, -1, -1):  # Iterate backwards
+                    W = self.W
+                    b = self.b
+
+                    if i == n_layers:
+                        Delta[i] = T[lower_idx:upper_idx, :] - Output
+                    else:
+                        Delta[i] = self._backprop_delta(Delta[i+1], W[i+1], _Z[i+1],
+                                                        i)
+
+                    dJdW_i = self._dJdW(_Z[i], Delta[i], i)
+                    dJdb_i = self._dJdb(Delta[i], i)
+
+                    W[i] += learning_rate * dJdW_i
+                    b[i] += learning_rate * dJdb_i
+
+                    self.W = W
+                    self.b = b
+            if epoch % (epochs / 5) == 0:
+                c = self._cost(T, _Output)
+                P = np.argmax(_Output, axis=1)
                 r = self._classification_rate(Y, P)
                 print("epoch:", epoch, "cost:", c, "classification_rate:", r)
                 costs.append(c)
+                classification_rates.append(r)
 
-            # this is gradient ASCENT, not DESCENT
-            Delta = [None for i in range(n_layers+1)]
-            for i in range(n_layers, -1, -1):  # Iterate backwards
-                W = self.W
-                b = self.b
-
-                if i == n_layers:
-                    Delta[i] = T - Output
-                else:
-                    Delta[i] = self._backprop_delta(Delta[i+1], W[i+1],
-                                                    _Z[i+1], i)
-
-                dJdW_i = self._dJdW(_Z[i], Delta[i], i)
-                dJdb_i = self._dJdb(Delta[i], i)
-
-                W[i] += learning_rate * dJdW_i
-                b[i] += learning_rate * dJdb_i
-
-                self.W = W
-                self.b = b
-
-        plt.plot(costs)
+        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+        ax.plot(costs[1:])
+        ax.set_title('Cost')
         plt.show()
 
         return None
@@ -293,6 +330,7 @@ class FeedForward:
         assert A.shape == (N, M[i])
         _Z = Z.forward(A)
         assert _Z.shape == (N, M[i])
+        assert not np.any(np.isnan(_Z))
         return _Z
 
     def _to_indicator_matrix(self, x, n_distinct):
@@ -334,7 +372,9 @@ class FeedForward:
             Total cost (error).
         """
         tot = T * np.log(Y)
-        return tot.sum()
+        ret = tot.sum()
+        assert not np.any(np.isnan(ret))
+        return ret
 
     def _classification_rate(self, Y, P):
         """
@@ -373,8 +413,8 @@ class FeedForward:
             Weights at subsequent layer (i+1).
         _Z : np.ndarray, shape (N, M[i+1])
             Layer outputs at current layer. Note that _Z[i] comes BEFORE W[i],
-            since we set _Z[0] to X. Therefore, the Z index for the ith layer
-            is Z[i+1].
+            since we set _Z[0] to X. Therefore, the Z index for the ith layer is
+            Z[i+1].
         i : int
             Index of hidden layer.
 
