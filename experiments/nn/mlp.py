@@ -115,7 +115,7 @@ class ReLU(Activation):
 
 class MLP:
 
-    def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5):
+    def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5, reg=.01):
         """
         Multip Layer Perceptron neural network implemented with NumPy. Uses gradient ascent.
 
@@ -131,6 +131,8 @@ class MLP:
             Activation function.
         learning_rate : numeric
             Learning rate.
+        reg : numeric, default .01
+            Regularization parameter.
 
         Attributes
         ----------
@@ -159,6 +161,7 @@ class MLP:
         self.K = K
         self.Z = Z
         self.learning_rate = learning_rate
+        self.reg = reg
         self.n_layers_ = len(hidden_layer_sizes)
         self.M = [D] + hidden_layer_sizes + [K]
         n_layers = self.n_layers_
@@ -173,7 +176,8 @@ class MLP:
 
     def forward(self, X):
         """
-        Runs one forward pass through all layers.
+        Runs one forward pass through all layers. Final layer inputs are normalized
+        prior to passing through softmax.
 
         Parameters
         ----------
@@ -205,17 +209,8 @@ class MLP:
         final_A = Z[-2].dot(W[n_layers]) + b[n_layers]
         assert not np.any(np.isnan(final_A))
 
-        # Compute softmax
-        # Normalize inputs first
-        final_A_mean = np.stack((final_A.mean(axis=1),) * K, axis=-1)
-        final_A_std = np.stack((final_A.std(axis=1),) * K, axis=-1)
-        final_A = (final_A - final_A_mean) / final_A_std
-        expA = np.exp(final_A)
-        assert not np.any(np.isnan(expA))
-
-        Y = expA / expA.sum(axis=1, keepdims=True)
-        assert Y.shape == (N, self.K)
-        assert not np.any(np.isnan(Y))
+        # Compute final layer outputs
+        Y = self._forward_final_layer(final_A)
 
         Z[-1] = Y
         assert len(Z) == n_layers + 2
@@ -246,15 +241,16 @@ class MLP:
         n_layers = self.n_layers_
         K = self.K
         learning_rate = self.learning_rate
+        reg = self.reg
 
-        T = self._to_indicator_matrix(Y, K)
+        T = self._transform_targets(Y)
 
         if batch_size > len(X):
             print('WARNING: Batch size > len(X). Setting batch size to len(X)')
             batch_size = len(X)
         n_batches = int(len(X) / batch_size)
-        costs = []
-        classification_rates = []
+        losses = []
+        performance_metrics = []
 
         for epoch in range(epochs):
             _Output = np.empty_like(T)  #  Aggregate Output for entire epoch
@@ -275,7 +271,7 @@ class MLP:
                     b = self.b
 
                     if i == n_layers:
-                        Delta[i] = T[lower_idx:upper_idx, :] - Output
+                        Delta[i] = self._backprop_delta_final_layer(T[lower_idx:upper_idx, :], Output)
                     else:
                         Delta[i] = self._backprop_delta(Delta[i+1], W[i+1], _Z[i+1],
                                                         i)
@@ -283,25 +279,46 @@ class MLP:
                     dJdW_i = self._dJdW(_Z[i], Delta[i], i)
                     dJdb_i = self._dJdb(Delta[i], i)
 
-                    W[i] += learning_rate * dJdW_i
-                    b[i] += learning_rate * dJdb_i
+                    W[i] -= learning_rate * dJdW_i + reg*W[i]
+                    b[i] -= learning_rate * dJdb_i + reg*b[i]
 
                     self.W = W
                     self.b = b
             if epoch % (epochs / 5) == 0:
-                c = self._cost(T, _Output)
-                P = np.argmax(_Output, axis=1)
-                r = self._classification_rate(Y, P)
-                print("epoch:", epoch, "cost:", c, "classification_rate:", r)
-                costs.append(c)
-                classification_rates.append(r)
+                l = self._loss(T, _Output)
+                P = self._transform_output(Output)
+                pm = self._performance_metric(Y, P)
+                print("epoch:", epoch, "loss:", l, "performance_metric:", pm)
+                losses.append(l)
+                performance_metrics.append(pm)
 
-        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-        ax.plot(costs[1:])
-        ax.set_title('Cost')
+        fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(13, 5))
+        ax0.plot(losses[1:])
+        ax0.set_title('Loss')
+        ax1.plot(performance_metrics[1:])
+        ax1.set_title('Performance Metric')
         plt.show()
 
         return None
+
+    def predict(self, X):
+        """
+        Wrapper method around forward() and _transform_output. This method allows
+        MLPs to conform to scikit-learn's fit/predict schema.
+
+        Parameters
+        ----------
+        X : np.ndarray, shape (N, D)
+            Input matrix.
+
+        Returns
+        -------
+        ?
+            Whatever `transformed_output()` returns.
+        """
+        Output = self.forward(X)
+        transformed_Output = self._transform_output(Output)
+        return transformed_Output
 
     def _forward_single_layer(self, prev_Z, i):
         """
@@ -333,6 +350,53 @@ class MLP:
         assert not np.any(np.isnan(_Z))
         return _Z
 
+    def _forward_final_layer(self, final_A):
+        """
+        Abstract method. Computes the forward pass of the final layer. This is different between
+        classifcation and regression.
+
+        Parameters
+        ----------
+        final_A, np.ndarray, shape (N, K)
+            Final layer Wz+b
+
+        Returns
+        -------
+        np.ndarray, shape (N, K)
+            Final layer outputs.
+        """
+        raise NotImplementedError()
+
+    def _transform_output(self, Output):
+        """
+        Abstract method. Transforms final layer output into predictions.
+
+        Parameters
+        ----------
+        np.ndarray, shape (N, K)
+
+        Returns
+        -------
+        ?
+            Implementation-specific
+        """
+        raise NotImplementedError()
+
+    def _transform_targets(self, Y):
+        """
+        Abstract method. Transforms targets, differs b/w regression and classification.
+
+        Parameters
+        ----------
+        Y : array-like, shape(N)
+
+        Returns
+        -------
+        ?
+            Transformed targets. Implementation is specific to MLP type.
+        """
+        raise NotImplementedError()
+
     def _to_indicator_matrix(self, x, n_distinct):
         """
         Turns a vector of integers into an indicator matrix.
@@ -355,9 +419,9 @@ class MLP:
             X[i, x[i]] = 1
         return X
 
-    def _cost(self, T, Y):
+    def _loss(self, T, Y):
         """
-        Computes the cost (error) of the predictions using T*log(Y).
+        Abstract method. Computes the loss of the predictions.
 
         Parameters
         ----------
@@ -369,16 +433,13 @@ class MLP:
         Returns
         -------
         float
-            Total cost (error).
+            Total loss.
         """
-        tot = T * np.log(Y)
-        ret = tot.sum()
-        assert not np.any(np.isnan(ret))
-        return ret
+        raise NotImplementedError()
 
-    def _classification_rate(self, Y, P):
+    def _performance_metric(self, Y, P):
         """
-        Determines the classification rate, n_correct / n_total.
+        Abstract method. Computes performance metric.
 
         Parameters
         ----------
@@ -390,16 +451,28 @@ class MLP:
         Returns
         -------
         float
-            n_correct / n_total
+            ?
         """
-        assert np.shape(Y) == np.shape(P)
-        n_correct = 0
-        n_total = 0
-        for i in range(len(Y)):
-            n_total += 1
-            if Y[i] == P[i]:
-                n_correct += 1
-        return float(n_correct) / n_total
+        raise NotImplementedError()
+
+    def _backprop_delta_final_layer(self, T, Output):
+        """
+        Abstract method. Compute the backprop delta for the final layer. This is different for regression and
+        classification, since classification uses softmax.
+
+        Parameters
+        ----------
+        T : np.ndarray, shape (N[lower_idx:upper_idx], K)
+            Batch targets as indicator matrix.
+        Output : np.ndarray, shape (N[lower_idx:upper_idx], K)
+            Batch output.
+
+        Returns
+        -------
+        np.ndarray, shape (N, K)
+            Delta of final layer.
+        """
+        raise NotImplementedError()
 
     def _backprop_delta(self, subs_Delta, subs_W, _Z, i):
         """
@@ -482,3 +555,248 @@ class MLP:
         ret = np.sum(Delta, axis=0)
         assert ret.shape == (M[i+1],)
         return ret
+
+
+class MLPClassifier(MLP):
+
+    def _transform_targets(self, Y):
+        """
+        Transforms targets into indicator matrix.
+
+        Parameters
+        ----------
+        Y : array-like, shape(N)
+
+        Returns
+        -------
+        np.ndarray, shape(N, K)
+            Transformed targets as indicator matrix.
+        """
+        K = self.K
+        return self._to_indicator_matrix(Y, K)
+
+    def _forward_final_layer(self, final_A):
+        """
+        Computes the forward pass of the final layer. For classificaiton, this normalizes the
+        inputs and computes softmax.
+
+        Parameters
+        ----------
+        final_A, np.ndarray, shape (N, K)
+            Final layer Wz+b
+
+        Returns
+        -------
+        np.ndarray, shape (N, K)
+            Final layer outputs.
+        """
+        K = self.K
+        N = final_A.shape[0]
+
+        # Normalize inputs
+        final_A_mean = np.stack((final_A.mean(axis=1),) * K, axis=-1)
+        final_A_std = np.stack((final_A.std(axis=1),) * K, axis=-1)
+        final_A = (final_A - final_A_mean) / final_A_std
+
+        # Compute softmax
+        expA = np.exp(final_A)
+        assert not np.any(np.isnan(expA))
+        Y = expA / expA.sum(axis=1, keepdims=True)
+        assert Y.shape == (N, K)
+        assert not np.any(np.isnan(Y))
+
+        return Y
+
+    def _transform_output(self, Output):
+        """
+        Transforms final layer output into predictions, which are an array of predicted classes.
+
+        Parameters
+        ----------
+        np.ndarray, shape (N, K)
+
+        Returns
+        -------
+        np.ndarray, shape (N,)
+            Array of predicted classes.
+        """
+        P = np.argmax(_Output, axis=1)
+        return P
+
+    def _loss(self, T, Y):
+        """
+        Computes the loss of the predictions using T*log(Y).
+
+        Parameters
+        ----------
+        T : np.ndarray, shape(N, K)
+            Targets as indicator matrix.
+        Y : np.ndarray, shape(N, K)
+            Predictions as indicator matrix.
+
+        Returns
+        -------
+        float
+            Total cost (error).
+        """
+        loss = -T*np.log(Y)
+        loss = loss.sum()
+        assert not np.any(np.isnan(loss))
+        return loss
+
+    def _performance_metric(self, Y, P):
+        """
+        Determines the classification rate, n_correct / n_total.
+
+        Parameters
+        ----------
+        Y : array-like, shape (N,)
+            Targets.
+        P : array-like, shape (N,)
+            Predictions.
+
+        Returns
+        -------
+        float
+            n_correct / n_total
+        """
+        assert np.shape(Y) == np.shape(P)
+        n_correct = 0
+        n_total = 0
+        for i in range(len(Y)):
+            n_total += 1
+            if Y[i] == P[i]:
+                n_correct += 1
+        return float(n_correct) / n_total
+
+    def _backprop_delta_final_layer(self, T, Output):
+        """
+        Compute the backprop delta for the final layer. For classification, this factors in
+        the softmax derivative.
+
+        Parameters
+        ----------
+        T : np.ndarray, shape (N[lower_idx:upper_idx], K)
+            Batch targets as indicator matrix.
+        Output : np.ndarray, shape (N[lower_idx:upper_idx], K)
+            Batch output.
+
+        Returns
+        -------
+        np.ndarray, shape (N, K)
+            Delta of final layer.
+        """
+        return -1*(T - Output)
+
+
+from sklearn.metrics import r2_score
+
+class MLPRegressor(MLP):
+
+    def _transform_targets(self, Y):
+        """
+        Returns targets as is.
+
+        Parameters
+        ----------
+        Y : array-like, shape(N)
+
+        Returns
+        -------
+        array-like, shape (N)
+            Targets as is.
+        """
+        return Y
+
+    def _forward_final_layer(self, final_A):
+        """
+        Computes the forward pass of the final layer. For regression, this is just the final Wz+b.
+
+        Parameters
+        ----------
+        final_A, np.ndarray, shape (N, K)
+            Final layer Wz+b
+
+        Returns
+        -------
+        np.ndarray, shape (N, K)
+            Final layer outputs.
+        """
+        return final_A
+
+    def _transform_output(self, Output):
+        """
+        Returns Output as is.
+
+        Parameters
+        ----------
+        np.ndarray, shape (N, K)
+
+        Returns
+        -------
+        np.array, shape (N,)
+            Array of Outputs.
+        """
+        return Output
+
+    def _loss(self, T, Y):
+        """
+        Computes the loss of the predictions using MSE. Note that this is actually the reward since we're doing gradient ascent.
+
+        Parameters
+        ----------
+        T : np.ndarray, shape(N, K)
+            Targets as indicator matrix.
+        Y : np.ndarray, shape(N, K)
+            Predictions as indicator matrix.
+
+        Returns
+        -------
+        float
+            Total loss.
+        """
+        loss = .5*((T-Y)**2).mean()
+        assert not np.any(np.isnan(loss))
+        return loss
+
+    def _performance_metric(self, Y, P):
+        """
+        Computes r2.
+
+        Parameters
+        ----------
+        Y : array-like, shape (N,)
+            Targets.
+        P : array-like, shape (N,)
+            Predictions.
+
+        Returns
+        -------
+        float
+            r2
+        """
+#         Y_mean = Y.mean()
+#         ssreg = ((P - Y_mean)**2).sum()
+#         sstot = ((Y - Y_mean)**2).sum()
+#         r2 = ssreg / sstot
+#         return r2
+        return r2_score(Y, P)
+
+    def _backprop_delta_final_layer(self, T, Output):
+        """
+        Compute the backprop delta for the final layer. For regression, this is
+        just dJ/dY, where J is MSE, or `.5*((T-Y)**2).mean()`.
+
+        Parameters
+        ----------
+        T : np.ndarray, shape (N[lower_idx:upper_idx], K)
+            Batch targets as indicator matrix.
+        Output : np.ndarray, shape (N[lower_idx:upper_idx], K)
+            Batch output.
+
+        Returns
+        -------
+        np.ndarray, shape (N, K)
+            Delta of final layer.
+        """
+        return -1*(T-Output)
