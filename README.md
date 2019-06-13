@@ -1,4 +1,4 @@
-# RL POMDP
+# Research
 
 ## Description
 Research on the effectiveness and improvement of **Reinforcement Learning** algorithms in **partially observable** environments.

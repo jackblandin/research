@@ -5,6 +5,7 @@ channels:
   - glemaitre
   - akode
 dependencies:
+  - pandas
   - python=3.6.8
   - pip
   - numpy=1.15.4
