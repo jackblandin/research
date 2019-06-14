@@ -2,3 +2,5 @@
 *.pyc
 experiments/**/logs/*
 */**/data/**/*.csv
+dist/
+*egg-info/

@@ -22,6 +22,3 @@ jupyter notebook
 ```
 
 Then when you're in the Jupyter Notebook, select `Kernel > Change Kernel > conda (rlpomdp)`.
-
-
-
