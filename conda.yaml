@@ -1,4 +1,4 @@
-name: rlpomdp
+name: research
 channels:
   - defaults
   - conda-forge
@@ -20,3 +20,4 @@ dependencies:
   - pip:
     - setuptools==40.6.3
     - git+https://github.com/jackblandin/gym-tiger.git
+    - research

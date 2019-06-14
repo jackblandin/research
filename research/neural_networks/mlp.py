@@ -1,40 +1,33 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.metrics import r2_score
 
 
 class Activation:
+    """Abstract class. Ativation function used in a MLP neural network."""
 
     def __init__(self):
-        """
-        Activation function used in a MLP neural network.
-        """
         pass
 
     def forward(self, A):
-        """
-        Computes forward activation function.
-        """
+        """Computes forward activation function."""
         raise NotImplementedError()
 
     def back(self, X):
-        """
-        Computes derivative of loss function activation function w.r.t.
+        """Computes derivative of loss function activation function w.r.t.
         activation function for a particular layer.
         """
         raise NotImplementedError()
 
 
 class Sigmoid(Activation):
+    """Sigmoid activation function used in a MLP neural network."""
 
     def __init__(self):
-        """
-        Sigmoid activation function used in a MLP neural network.
-        """
         pass
 
     def forward(self, A):
-        """
-        Computes activation of a single layer.
+        """Computes activation of a single layer.
 
         Parameters
         ----------
@@ -49,8 +42,7 @@ class Sigmoid(Activation):
         return _Z
 
     def back(self, _Z):
-        """
-        Computes partial derivative of loss function w.r.t. activation
+        """Computes partial derivative of loss function w.r.t. activation
         function for a particular layer.
 
         Parameters
@@ -69,16 +61,13 @@ class Sigmoid(Activation):
 
 
 class ReLU(Activation):
+    """ReLU activation function used in a MLP neural network."""
 
     def __init__(self):
-        """
-        ReLU activation function used in a MLP neural network.
-        """
         pass
 
     def forward(self, A):
-        """
-        Computes activation of a single layer.
+        """Computes activation of a single layer.
 
         Parameters
         ----------
@@ -94,8 +83,7 @@ class ReLU(Activation):
         return _Z
 
     def back(self, _Z):
-        """
-        Computes partial derivative of loss function w.r.t. activation
+        """Computes partial derivative of loss function w.r.t. activation
         function for a particular layer.
 
         Parameters
@@ -114,49 +102,51 @@ class ReLU(Activation):
 
 
 class MLP:
+    """Multip Layer Perceptron neural network implemented with NumPy.
 
-    def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5, reg=.01):
-        """
-        Multip Layer Perceptron neural network implemented with NumPy. Uses gradient ascent.
+    Uses gradient ascent.
 
-        Parameters
-        ----------
-        D : int
-            Input dimension.
-        hidden_layer_sizes : array-like
-            Hidden layer sizes. An array of integers.
-        K : int
-            Number of output classes.
-        Z : Activation
-            Activation function.
-        learning_rate : numeric
-            Learning rate.
-        reg : numeric, default .01
-            Regularization parameter.
+    Parameters
+    ----------
+    D : int
+        Input dimension.
+    hidden_layer_sizes : array-like
+        Hidden layer sizes. An array of integers.
+    K : int
+        Number of output classes.
+    Z : Activation
+        Activation function.
+    learning_rate : numeric
+        Learning rate.
+    reg : numeric, default .01
+        Regularization parameter.
 
-        Attributes
-        ----------
-        n_layers, int
-            Number of hidden layers, defined by length of hidden_layer_sizes.
-        M : list, length (n_layers+2)
-            Hidden layer sizes, with M[0] set to D and M[-1] set to K. This
-            makes computing
-            recursive forward and back propagation easier.
-        W : numpy.array, shape (len(M)+1)
-            Array of weight matrices.
-        b : numpy.array, shape (len(M)+1)
-            Array of bias matrices.
+    Attributes
+    ----------
+    n_layers, int
+        Number of hidden layers, defined by length of hidden_layer_sizes.
+    M : list, length (n_layers+2)
+        Hidden layer sizes, with M[0] set to D and M[-1] set to K. This makes
+        computing
+        recursive forward and back propagation easier.
+    W : numpy.array, shape (len(M)+1)
+        Array of weight matrices.
+    b : numpy.array, shape (len(M)+1)
+        Array of bias matrices.
 
-        Examples
-        --------
-        >>> D = X_train.shape[1]
-        >>> K = Y_train.shape[0]
-        >>> hidden_layer_sizes = [5, 5]
-        >>> Z = Sigmoid()
-        >>> model = FeedForward(D, hidden_layer_sizes, K, Z)
-        >>> model.fit(X_train, Y_train)
-        >>> preds, _ = model.forward(X_test)
-        """
+    Examples
+    --------
+    >>> D = X_train.shape[1]
+    >>> K = Y_train.shape[0]
+    >>> hidden_layer_sizes = [5, 5]
+    >>> Z = Sigmoid()
+    >>> model = FeedForward(D, hidden_layer_sizes, K, Z)
+    >>> model.fit(X_train, Y_train)
+    >>> preds, _ = model.forward(X_test)
+    """
+
+    def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5,
+                 reg=.01):
         self.D = D
         self.K = K
         self.Z = Z
@@ -175,9 +165,9 @@ class MLP:
             self.b[i] = np.random.randn(M[i+1])
 
     def forward(self, X):
-        """
-        Runs one forward pass through all layers. Final layer inputs are normalized
-        prior to passing through softmax.
+        """Runs one forward pass through all layers.
+
+        Final layer inputs are normalized prior to passing through softmax.
 
         Parameters
         ----------
@@ -195,8 +185,6 @@ class MLP:
         n_layers = self.n_layers_
         W = self.W
         b = self.b
-        K = self.K
-        N = X.shape[0]
 
         # Collect Z at each layer so we can use them in backprop.
         Z = [None for i in range(n_layers+2)]
@@ -219,8 +207,7 @@ class MLP:
         return Y, Z
 
     def fit(self, X, Y, epochs=1000, batch_size=1000):
-        """
-        Fits the neural network using backpropagation.
+        """Fits the neural network using backpropagation.
 
         Parameters
         ----------
@@ -230,7 +217,8 @@ class MLP:
             Vector of targets. This will be transformed into a onehot encoded
             indicator matrix, called T.
         batch_size : int, default=1000
-            Training batch size. If batch_size > len(X), then the batch size will be changed to len(X).
+            Training batch size. If batch_size > len(X), then the batch size
+            will be changed to len(X).
         epochs : int
             Number of epochs.
 
@@ -239,7 +227,6 @@ class MLP:
         None
         """
         n_layers = self.n_layers_
-        K = self.K
         learning_rate = self.learning_rate
         reg = self.reg
 
@@ -253,7 +240,7 @@ class MLP:
         performance_metrics = []
 
         for epoch in range(epochs):
-            _Output = np.empty_like(T)  #  Aggregate Output for entire epoch
+            _Output = np.empty_like(T)  # Aggregate Output for entire epoch
 
             for b in range(n_batches):
                 lower_idx = b*batch_size
@@ -271,10 +258,11 @@ class MLP:
                     b = self.b
 
                     if i == n_layers:
-                        Delta[i] = self._backprop_delta_final_layer(T[lower_idx:upper_idx, :], Output)
+                        Delta[i] = self._backprop_delta_final_layer(
+                            T[lower_idx:upper_idx, :], Output)
                     else:
-                        Delta[i] = self._backprop_delta(Delta[i+1], W[i+1], _Z[i+1],
-                                                        i)
+                        Delta[i] = self._backprop_delta(Delta[i+1], W[i+1],
+                                                        _Z[i+1], i)
 
                     dJdW_i = self._dJdW(_Z[i], Delta[i], i)
                     dJdb_i = self._dJdb(Delta[i], i)
@@ -285,11 +273,12 @@ class MLP:
                     self.W = W
                     self.b = b
             if epoch % (epochs / 5) == 0:
-                l = self._loss(T, _Output)
+                loss = self._loss(T, _Output)
                 P = self._transform_output(Output)
                 pm = self._performance_metric(Y, P)
-                print("epoch:", epoch, "loss:", l, "performance_metric:", pm)
-                losses.append(l)
+                print("epoch:", epoch, "loss:", loss, "performance_metric:",
+                      pm)
+                losses.append(loss)
                 performance_metrics.append(pm)
 
         fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(13, 5))
@@ -302,9 +291,10 @@ class MLP:
         return None
 
     def predict(self, X):
-        """
-        Wrapper method around forward() and _transform_output. This method allows
-        MLPs to conform to scikit-learn's fit/predict schema.
+        """Wrapper method around forward() and _transform_output.
+
+        This method allows MLPs to conform to scikit-learn's fit/predict
+        schema.
 
         Parameters
         ----------
@@ -321,8 +311,7 @@ class MLP:
         return transformed_Output
 
     def _forward_single_layer(self, prev_Z, i):
-        """
-        Runs one forward pass through a single layer.
+        """Runs one forward pass through a single layer.
 
         Parameters
         ----------
@@ -351,9 +340,9 @@ class MLP:
         return _Z
 
     def _forward_final_layer(self, final_A):
-        """
-        Abstract method. Computes the forward pass of the final layer. This is different between
-        classifcation and regression.
+        """Abstract method. Computes the forward pass of the final layer.
+
+        This is different between classification and regression.
 
         Parameters
         ----------
@@ -368,8 +357,7 @@ class MLP:
         raise NotImplementedError()
 
     def _transform_output(self, Output):
-        """
-        Abstract method. Transforms final layer output into predictions.
+        """Abstract method. Transforms final layer output into predictions.
 
         Parameters
         ----------
@@ -383,8 +371,9 @@ class MLP:
         raise NotImplementedError()
 
     def _transform_targets(self, Y):
-        """
-        Abstract method. Transforms targets, differs b/w regression and classification.
+        """Abstract method. Transforms targets.
+
+        Differs b/w regression and classification.
 
         Parameters
         ----------
@@ -398,8 +387,7 @@ class MLP:
         raise NotImplementedError()
 
     def _to_indicator_matrix(self, x, n_distinct):
-        """
-        Turns a vector of integers into an indicator matrix.
+        """Turns a vector of integers into an indicator matrix.
 
         Parameters
         ----------
@@ -438,8 +426,7 @@ class MLP:
         raise NotImplementedError()
 
     def _performance_metric(self, Y, P):
-        """
-        Abstract method. Computes performance metric.
+        """Abstract method. Computes performance metric.
 
         Parameters
         ----------
@@ -456,9 +443,10 @@ class MLP:
         raise NotImplementedError()
 
     def _backprop_delta_final_layer(self, T, Output):
-        """
-        Abstract method. Compute the backprop delta for the final layer. This is different for regression and
-        classification, since classification uses softmax.
+        """Abstract method.
+
+        Compute the backprop delta for the final layer. This is different for
+        regression and classification, since classification uses softmax.
 
         Parameters
         ----------
@@ -475,8 +463,7 @@ class MLP:
         raise NotImplementedError()
 
     def _backprop_delta(self, subs_Delta, subs_W, _Z, i):
-        """
-        Computes the delta for computing weight update.
+        """Computes the delta for computing weight update.
 
         Parameters
         ----------
@@ -486,8 +473,8 @@ class MLP:
             Weights at subsequent layer (i+1).
         _Z : np.ndarray, shape (N, M[i+1])
             Layer outputs at current layer. Note that _Z[i] comes BEFORE W[i],
-            since we set _Z[0] to X. Therefore, the Z index for the ith layer is
-            Z[i+1].
+            since we set _Z[0] to X. Therefore, the Z index for the ith layer
+            is Z[i+1].
         i : int
             Index of hidden layer.
 
@@ -508,8 +495,7 @@ class MLP:
         return ret
 
     def _dJdW(self, prev_Z, Delta, i):
-        """
-        Computes partial derivative of loss function w.r.t. weights at layer i.
+        """Computes partial derivative of loss function w.r.t. weights at layer i.
 
         Parameters
         ----------
@@ -560,8 +546,7 @@ class MLP:
 class MLPClassifier(MLP):
 
     def _transform_targets(self, Y):
-        """
-        Transforms targets into indicator matrix.
+        """Transforms targets into indicator matrix.
 
         Parameters
         ----------
@@ -576,9 +561,9 @@ class MLPClassifier(MLP):
         return self._to_indicator_matrix(Y, K)
 
     def _forward_final_layer(self, final_A):
-        """
-        Computes the forward pass of the final layer. For classificaiton, this normalizes the
-        inputs and computes softmax.
+        """Computes the forward pass of the final layer.
+
+        For classificaiton, this normalizes the inputs and computes softmax.
 
         Parameters
         ----------
@@ -608,8 +593,8 @@ class MLPClassifier(MLP):
         return Y
 
     def _transform_output(self, Output):
-        """
-        Transforms final layer output into predictions, which are an array of predicted classes.
+        """Transforms final layer output into predictions, which are an array
+        of predicted classes.
 
         Parameters
         ----------
@@ -620,12 +605,11 @@ class MLPClassifier(MLP):
         np.ndarray, shape (N,)
             Array of predicted classes.
         """
-        P = np.argmax(_Output, axis=1)
+        P = np.argmax(Output, axis=1)
         return P
 
     def _loss(self, T, Y):
-        """
-        Computes the loss of the predictions using T*log(Y).
+        """Computes the loss of the predictions using T*log(Y).
 
         Parameters
         ----------
@@ -645,8 +629,7 @@ class MLPClassifier(MLP):
         return loss
 
     def _performance_metric(self, Y, P):
-        """
-        Determines the classification rate, n_correct / n_total.
+        """Determines the classification rate, n_correct / n_total.
 
         Parameters
         ----------
@@ -670,9 +653,9 @@ class MLPClassifier(MLP):
         return float(n_correct) / n_total
 
     def _backprop_delta_final_layer(self, T, Output):
-        """
-        Compute the backprop delta for the final layer. For classification, this factors in
-        the softmax derivative.
+        """Compute the backprop delta for the final layer.
+
+        For classification, this factors in the softmax derivative.
 
         Parameters
         ----------
@@ -689,13 +672,10 @@ class MLPClassifier(MLP):
         return -1*(T - Output)
 
 
-from sklearn.metrics import r2_score
-
 class MLPRegressor(MLP):
 
     def _transform_targets(self, Y):
-        """
-        Returns targets as is.
+        """Returns targets as is.
 
         Parameters
         ----------
@@ -709,8 +689,9 @@ class MLPRegressor(MLP):
         return Y
 
     def _forward_final_layer(self, final_A):
-        """
-        Computes the forward pass of the final layer. For regression, this is just the final Wz+b.
+        """Computes the forward pass of the final layer.
+
+        For regression, this is just the final Wz+b.
 
         Parameters
         ----------
@@ -725,8 +706,7 @@ class MLPRegressor(MLP):
         return final_A
 
     def _transform_output(self, Output):
-        """
-        Returns Output as is.
+        """Returns Output as is.
 
         Parameters
         ----------
@@ -740,8 +720,10 @@ class MLPRegressor(MLP):
         return Output
 
     def _loss(self, T, Y):
-        """
-        Computes the loss of the predictions using MSE. Note that this is actually the reward since we're doing gradient ascent.
+        """Computes the loss of the predictions using MSE.
+
+        Note that this is actually the reward since we're doing gradient
+        ascent.
 
         Parameters
         ----------
@@ -760,8 +742,7 @@ class MLPRegressor(MLP):
         return loss
 
     def _performance_metric(self, Y, P):
-        """
-        Computes r2.
+        """Computes r2.
 
         Parameters
         ----------
@@ -783,8 +764,7 @@ class MLPRegressor(MLP):
         return r2_score(Y, P)
 
     def _backprop_delta_final_layer(self, T, Output):
-        """
-        Compute the backprop delta for the final layer. For regression, this is
+        """Compute the backprop delta for the final layer. For regression, this is
         just dJ/dY, where J is MSE, or `.5*((T-Y)**2).mean()`.
 
         Parameters
