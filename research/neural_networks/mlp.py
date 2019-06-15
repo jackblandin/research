@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score
+from copy import deepcopy
 
 
 class Activation:
@@ -78,7 +79,7 @@ class ReLU(Activation):
         -------
         np.ndarray, shape (N, M[i])
         """
-        _Z = A * (A > .5)
+        _Z = A * (A > 0)
         assert not np.any(np.isnan(_Z))
         return _Z
 
@@ -97,7 +98,7 @@ class ReLU(Activation):
             Partial derivative of loss function w.r.t. activation function
             at layer i.
         """
-        dZ = np.piecewise(_Z, [_Z < .5, _Z >= .5], [0, 1])
+        dZ = np.piecewise(_Z, [_Z < 0, _Z >= 0], [0, 1])
         return dZ
 
 
@@ -118,8 +119,13 @@ class MLP:
         Activation function.
     learning_rate : numeric
         Learning rate.
-    reg : numeric, default .01
+    reg : numeric, default 0
         Regularization parameter.
+    mu : numeric, default 0
+        Momentum parameter.
+    clip_thresh : numeric, default np.inf
+        Maximum weight/bias gradient allowed. If gradient is larger than
+        clip_thresh, the gradient is replaced with clip_thresh.
 
     Attributes
     ----------
@@ -129,10 +135,14 @@ class MLP:
         Hidden layer sizes, with M[0] set to D and M[-1] set to K. This makes
         computing
         recursive forward and back propagation easier.
-    W : numpy.array, shape (len(M)+1)
-        Array of weight matrices.
-    b : numpy.array, shape (len(M)+1)
-        Array of bias matrices.
+    W : list, shape (len(M)+1)
+        List of weight matrices.
+    b : list, shape (len(M)+1)
+        List of bias vectors.
+    vW_ : list, shape (len(M)+1)
+        List of weight momentums. Same shapes as matrices in W.
+    vb_ : list, shape (len(M)+1)
+        List of bias momentums. Same shapes as bias vectors.
 
     Examples
     --------
@@ -146,23 +156,67 @@ class MLP:
     """
 
     def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5,
-                 reg=.01):
+                 reg=0, mu=0, clip_thresh=np.inf):
         self.D = D
         self.K = K
         self.Z = Z
         self.learning_rate = learning_rate
         self.reg = reg
+        self.mu = mu
+        self.clip_thresh = clip_thresh
         self.n_layers_ = len(hidden_layer_sizes)
         self.M = [D] + hidden_layer_sizes + [K]
         n_layers = self.n_layers_
         M = self.M
         self.W = [None for i in range(n_layers+1)]
         self.b = [None for i in range(n_layers+1)]
+        self.vW_ = [None for i in range(n_layers+1)]
+        self.vb_ = [None for i in range(n_layers+1)]
 
-        # randomly initialize weights
+        # Randomly initialize weights
+        # Normalize with 1/sqrt(D)
+        norm = 1/np.sqrt(D)
         for i in range(n_layers+1):
-            self.W[i] = np.random.randn(M[i], M[i+1])
-            self.b[i] = np.random.randn(M[i+1])
+            self.W[i] = norm*np.random.randn(M[i], M[i+1])
+            self.b[i] = norm*np.random.randn(M[i+1])
+
+        # Initialize momentums
+        for i in range(n_layers+1):
+            self.vW_[i] = np.zeros((M[i], M[i+1]))
+            self.vb_[i] = np.zeros((M[i+1]))
+
+    def __copy__(self):
+        """Returns a copy of self.
+
+        Returns
+        -------
+        MLP
+            Copy of self.
+        """
+        obj = type(self).__new__(self.__class__)
+        obj.__dict__.update(self.__dict__.copy())
+        return obj
+
+    def __deepcopy__(self, memo):
+        """Returns a deep copy of self.
+
+        Useful in DQNs when copying the main network to the target network.
+
+        Parameters
+        ----------
+        memo : dict
+            Object's memo dict.
+
+        Returns
+        -------
+        MLP
+            Copy of self.
+        """
+        obj = type(self).__new__(self.__class__)
+        obj.__dict__.update(self.__dict__.copy())
+        self.W = deepcopy(self.W, memo)
+        self.b = deepcopy(self.b, memo)
+        return obj
 
     def forward(self, X):
         """Runs one forward pass through all layers.
@@ -226,10 +280,6 @@ class MLP:
         -------
         None
         """
-        n_layers = self.n_layers_
-        learning_rate = self.learning_rate
-        reg = self.reg
-
         T = self._transform_targets(Y)
 
         if batch_size > len(X):
@@ -240,44 +290,37 @@ class MLP:
         performance_metrics = []
 
         for epoch in range(epochs):
-            _Output = np.empty_like(T)  # Aggregate Output for entire epoch
+            Output = np.empty_like(T)  # Aggregate Output for entire epoch
+            grad_max = 0  # For debugging
 
             for b in range(n_batches):
+                # Select batch
                 lower_idx = b*batch_size
                 upper_idx = (b+1)*batch_size
                 if upper_idx > len(X):
                     upper_idx = len(X) - 1
                 X_batch = X[lower_idx:upper_idx, :]
-                Output, _Z = self.forward(X_batch)
-                _Output[lower_idx:upper_idx] = Output
 
-                # this is gradient ASCENT, not DESCENT
-                Delta = [None for i in range(n_layers+1)]
-                for i in range(n_layers, -1, -1):  # Iterate backwards
-                    W = self.W
-                    b = self.b
+                # Predict output for batch
+                Output_batch, Z_batch = self.forward(X_batch)
+                Output[lower_idx:upper_idx] = Output_batch
 
-                    if i == n_layers:
-                        Delta[i] = self._backprop_delta_final_layer(
-                            T[lower_idx:upper_idx, :], Output)
-                    else:
-                        Delta[i] = self._backprop_delta(Delta[i+1], W[i+1],
-                                                        _Z[i+1], i)
+                # Update weights and biases at each layer
+                T_batch = T[lower_idx:upper_idx]
+                _grad_max = self.update(T_batch, Output_batch, Z_batch)
+                grad_max = max([grad_max, _grad_max])
 
-                    dJdW_i = self._dJdW(_Z[i], Delta[i], i)
-                    dJdb_i = self._dJdb(Delta[i], i)
-
-                    W[i] -= learning_rate * dJdW_i + reg*W[i]
-                    b[i] -= learning_rate * dJdb_i + reg*b[i]
-
-                    self.W = W
-                    self.b = b
-            if epoch % (epochs / 5) == 0:
-                loss = self._loss(T, _Output)
+            if epoch % (epochs / 10) == 0:
+                loss = self._loss(T, Output)
                 P = self._transform_output(Output)
                 pm = self._performance_metric(Y, P)
-                print("epoch:", epoch, "loss:", loss, "performance_metric:",
-                      pm)
+                out = 'epoch: {}'.format(epoch)
+                out += ', loss: {:.2f}'.format(loss)
+                out += ', performance_metric: {:.4f}'.format(pm)
+                w_max = max([w.max() for w in model.W])
+                out += ', max weight: {:.3f}'.format(w_max)
+                out += ', max weight gradient: {}'.format(grad_max)
+                print(out)
                 losses.append(loss)
                 performance_metrics.append(pm)
 
@@ -306,9 +349,81 @@ class MLP:
         ?
             Whatever `transformed_output()` returns.
         """
-        Output = self.forward(X)
+        Output, Z = self.forward(X)
         transformed_Output = self._transform_output(Output)
         return transformed_Output
+
+    def update(self, T, Output, _Z):
+        """Performs one backprop update, updating weights and biases for each
+        layer.
+
+        Parameters
+        ----------
+        T : np.ndarray, shape (K,)
+            Targets
+        Y : np.ndarray, shape (K,)
+            Predictions
+        _Z : list<np.ndarray>, shape (n_layer+1)
+            Outputs at each layer
+        Returns
+        -------
+        numeric
+            Max gradient update (for debugging during training).
+        """
+        n_layers = self.n_layers_
+        learning_rate = self.learning_rate
+        reg = self.reg
+        mu = self.mu
+
+        # For each layer, iterating backwards from final layer, compute
+        # deltas, weight partials, and update weights/biases.
+        Delta = [None for i in range(n_layers+1)]
+        grad_max = 0
+        for i in range(n_layers, -1, -1):
+            clip_thresh = self.clip_thresh
+            W = self.W
+            b = self.b
+            vW_i = self.vW_[i]
+            vb_i = self.vb_[i]
+
+            if i == n_layers:
+                # Compute delta at final layer
+                Delta[i] = self._backprop_delta_final_layer(T, Output)
+            else:
+                # Compute deltas at middle layer
+                Delta[i] = self._backprop_delta(Delta[i+1], W[i+1],
+                                                _Z[i+1], i)
+
+            # Compute weight and bias partial gradients
+            dJdW_i = self._dJdW(_Z[i], Delta[i], i)
+            dJdb_i = self._dJdb(Delta[i], i)
+
+            # Clip gradients that are too large
+            dJdW_i[dJdW_i > clip_thresh] = clip_thresh
+            dJdW_i[dJdW_i < -1*clip_thresh] = -1*clip_thresh
+            dJdb_i[dJdb_i > clip_thresh] = clip_thresh
+            dJdb_i[dJdb_i < -1*clip_thresh] = -1*clip_thresh
+
+            # Compute max gradient update (for debugging)
+            grad_max = max((grad_max, max(dJdW_i.max(), dJdW_i.min(), key=abs)))
+
+            # Adjust gradients with regularization
+            dJdW_i = dJdW_i + reg*W[i]
+            dJdb_i = dJdb_i + reg*b[i]
+
+            # Update momentums
+            self.vW_[i] = mu*vW_i + learning_rate*dJdW_i
+            self.vb_[i] = mu*vb_i + learning_rate*dJdb_i
+
+            # Compute final weight and bias updates
+            w_update = mu*self.vW_[i] + learning_rate*dJdW_i
+            b_update = mu*self.vb_[i] + learning_rate*dJdb_i
+
+            # Update weights
+            self.W[i] -= w_update
+            self.b[i] -= b_update
+
+        return grad_max
 
     def _forward_single_layer(self, prev_Z, i):
         """Runs one forward pass through a single layer.
@@ -780,3 +895,5 @@ class MLPRegressor(MLP):
             Delta of final layer.
         """
         return -1*(T-Output)
+
+
