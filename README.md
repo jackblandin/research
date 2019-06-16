@@ -15,7 +15,7 @@ conda env create -f=conda.yaml
 conda activate rlpomdp
 
 # Create an IPython kernel which will allow you to run the Jupyter Notebook in the conda environment
-python3.6 -m ipykernel install --user --name rlpomdp --display-name "conda (rlpomdp)"
+python3.6 -m ipykernel install --user --name research --display-name "research"
 
 # Start the jupyter notebook
 jupyter notebook

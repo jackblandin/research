@@ -391,8 +391,7 @@ class MLP:
                 Delta[i] = self._backprop_delta_final_layer(T, Output)
             else:
                 # Compute deltas at middle layer
-                Delta[i] = self._backprop_delta(Delta[i+1], W[i+1],
-                                                _Z[i+1], i)
+                Delta[i] = self._backprop_delta(Delta[i+1], W[i+1], _Z[i+1], i)
 
             # Compute weight and bias partial gradients
             dJdW_i = self._dJdW(_Z[i], Delta[i], i)
@@ -879,8 +878,8 @@ class MLPRegressor(MLP):
         return r2_score(Y, P)
 
     def _backprop_delta_final_layer(self, T, Output):
-        """Compute the backprop delta for the final layer. For regression, this is
-        just dJ/dY, where J is MSE, or `.5*((T-Y)**2).mean()`.
+        """Compute the backprop delta for the final layer. For regression, this
+        is just dJ/dY, where J is MSE, or `.5*((T-Y)**2).mean()`.
 
         Parameters
         ----------
