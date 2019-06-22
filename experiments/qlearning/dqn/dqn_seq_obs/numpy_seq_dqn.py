@@ -136,7 +136,7 @@ class NumpySeqDQN:
             for i, tqnet in enumerate(self.tqnets):
                 action_values[i], qnet_Zs[i] = tqnet.forward(X)
         else:
-            for i, mqnet in enumerate(self.tqnets):
+            for i, mqnet in enumerate(self.mqnets):
                 action_values[i], qnet_Zs[i] = mqnet.forward(X)
 
         return action_values.reshape(1, -1), qnet_Zs
@@ -208,11 +208,12 @@ class NumpySeqDQN:
         # "predictions".
         ##
         action_values, qnet_Zs = self.predict(flat_states)
-        # Note that best action is used to get Q value, but is not used when
-        # updating the model via backprop.
-        Q = np.max(action_values, axis=1)
-        best_action = np.argmax(action_values)
-        Z = qnet_Zs[best_action]
+        # NOTE 06/22/2019 - we are not using the BEST action to get the
+        # predicted Q value. When we made this change in NumpyDQNObsSingle, it
+        # was able to solve the GreaterThanZero-v0 environment. I have not yet
+        # figured out why using the best action doesn't work.
+        Q = action_values[:, action]
+        Z = qnet_Zs[action]
 
         ##
         # Using the target network, compute the expected Q values after taking

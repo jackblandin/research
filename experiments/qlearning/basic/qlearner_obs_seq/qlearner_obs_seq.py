@@ -1,13 +1,12 @@
 import numpy as np
 
-from .feature_transformer import SeqArrayToSortedStringTransformer
 from ....utils.tiger_env_utils import env_translate_obs, env_translate_action
 
 
 class QLearnerObsSeq:
 
-    def __init__(self, env, initial_alpha=.1, gamma=.9, alpha_decay=0,
-                 seq_len=3):
+    def __init__(self, env, feature_transformer, initial_alpha=.1, gamma=.9,
+                 alpha_decay=0, seq_len=3, translate=True):
         """
         Started 05/04/2019
         Q Learner with all combinations of seq_len observations as state space.
@@ -16,6 +15,9 @@ class QLearnerObsSeq:
         ----------
         env : gym.Env
             OpenAI Gym environment.
+        feature_transformer : object
+            Object that transforms raw state/observations into the Q function's
+            state representation. Must have a `transform()` instance method.
         initial_alpha : float
             Learning rate.
         gamma : float
@@ -24,6 +26,8 @@ class QLearnerObsSeq:
             Learning rate alpha will decay at 1/_n_updates**_alpha_decay.
         seq_len : int
             Number of sequential observations to use as the state.
+        translate : bool, default True
+            If true, keeps track of translated observations.
 
         Attributes
         ----------
@@ -57,12 +61,12 @@ class QLearnerObsSeq:
             Currently this is only used for debugging.
         """
         self.env = env
+        self.feature_transformer = feature_transformer
         self.initial_alpha = initial_alpha
         self.gamma = gamma
         self._alpha_decay = alpha_decay
         self.seq_len = seq_len
-        self.feature_transformer = SeqArrayToSortedStringTransformer(
-            env, seq_len=seq_len)
+        self.translate = translate
         num_obs = env.observation_space.n
         exp = seq_len
         num_states = 1
@@ -104,7 +108,8 @@ class QLearnerObsSeq:
     def update(self, otm1, atm1, r, ot, at):
         """
         Performs TD(0) update on the model using sequences of observations as
-        states.
+        states. Note that this does NOT use experience replay, which is how we
+        are able to avoid storing sequences of observations.
 
         Parameters
         ----------
@@ -123,7 +128,7 @@ class QLearnerObsSeq:
         -------
         None
         """
-        # Append new observation to last two observations
+        # Append new observation to last seq_len-1 observations
         if len(self.last_n_obs) == self.seq_len:
             self.last_n_obs.pop(0)
         self.last_n_obs.append(otm1)
@@ -145,23 +150,24 @@ class QLearnerObsSeq:
             G - self.Q[last_n_obs_trans, atm1])
         self._n_updates += 1
 
-        # Update training observation sequence counts
-        transl_obs = [env_translate_obs(o) for o in self.last_n_obs]
-        transl_obs = ', '.join(transl_obs)
-        if transl_obs in self.train_obs_seq_counts:
-            self.train_obs_seq_counts[transl_obs] += 1
-        else:
-            self.train_obs_seq_counts[transl_obs] = 1
+        if self.translate:
+            # Update training observation sequence counts
+            transl_obs = [env_translate_obs(o) for o in self.last_n_obs]
+            transl_obs = ', '.join(transl_obs)
+            if transl_obs in self.train_obs_seq_counts:
+                self.train_obs_seq_counts[transl_obs] += 1
+            else:
+                self.train_obs_seq_counts[transl_obs] = 1
 
-        ##
-        # Update training observation sequence + action counts
-        ##
-        transl_act = env_translate_action(at)
-        obs_seq_act = ' => '.join([transl_obs, transl_act])
-        if obs_seq_act in self.train_obs_seq_action_counts:
-            self.train_obs_seq_action_counts[obs_seq_act] += 1
-        else:
-            self.train_obs_seq_action_counts[obs_seq_act] = 1
+            ##
+            # Update training observation sequence + action counts
+            ##
+            transl_act = env_translate_action(at)
+            obs_seq_act = ' => '.join([transl_obs, transl_act])
+            if obs_seq_act in self.train_obs_seq_action_counts:
+                self.train_obs_seq_action_counts[obs_seq_act] += 1
+            else:
+                self.train_obs_seq_action_counts[obs_seq_act] = 1
 
     def sample_action(self, o, eps):
         if np.random.random() < eps:

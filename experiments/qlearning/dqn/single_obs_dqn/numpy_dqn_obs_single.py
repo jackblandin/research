@@ -123,7 +123,7 @@ class NumpyDQNObsSingle:
             for i, tqnet in enumerate(self.tqnets):
                 action_values[i], qnet_Zs[i] = tqnet.forward(X)
         else:
-            for i, mqnet in enumerate(self.tqnets):
+            for i, mqnet in enumerate(self.mqnets):
                 action_values[i], qnet_Zs[i] = mqnet.forward(X)
 
         return action_values.reshape(1, -1), qnet_Zs

@@ -404,7 +404,8 @@ class MLP:
             dJdb_i[dJdb_i < -1*clip_thresh] = -1*clip_thresh
 
             # Compute max gradient update (for debugging)
-            grad_max = max((grad_max, max(dJdW_i.max(), dJdW_i.min(), key=abs)))
+            grad_max = max((grad_max, max(dJdW_i.max(), dJdW_i.min(),
+                                          key=abs)))
 
             # Adjust gradients with regularization
             dJdW_i = dJdW_i + reg*W[i]
@@ -894,5 +895,3 @@ class MLPRegressor(MLP):
             Delta of final layer.
         """
         return -1*(T-Output)
-
-

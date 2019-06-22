@@ -3,6 +3,54 @@ import numpy as np
 from itertools import product
 
 
+class SeqFeatureTransformer:
+    """Transforms observations into string representations.
+
+    Attributes
+    ----------
+    idx_lookup_ : dict
+        Converts string repr to an integer index.
+    next_idx_ : int
+        Next index to use when encountering a new string representation.
+
+    Examples
+    --------
+    >>> sft = SeqFeatureTransformer()
+    >>> sft.transform([[1,2,3], [4,5,6]])
+    0
+    >>> sft.idx_lookup_
+    {'123456': 0}
+    >>> sft.next_idx_
+    1
+    """
+
+    def __init__(self):
+        self.idx_lookup_ = {}
+        self.next_idx_ = 0
+
+    def transform(self, X):
+        """Transforms observations into string representations.
+
+        Parameters
+        ----------
+        X : array<array-like>
+            Array of state/observation inputs. Each inner array is one state or
+            observation.
+
+        Returns
+        -------
+        int
+            Index of string representation of state/observation sequence.
+        """
+        X_t = ''
+        for x in X:
+            X_t += ''.join([str(i) for i in x])
+        if X_t not in self.idx_lookup_:
+            self.idx_lookup_[X_t] = self.next_idx_
+            self.next_idx_ += 1
+        return self.idx_lookup_[X_t]
+
+
 class SeqArrayToSortedStringTransformer:
 
     def __init__(self, env, seq_len):
