@@ -5,7 +5,8 @@ from .feature_transformer import ObservationAsStatesTransformer
 
 class QLearnerObsSingle:
 
-    def __init__(self, env, initial_alpha=.1, gamma=.9, alpha_decay=0):
+    def __init__(self, env, initial_alpha=.1, gamma=.9, alpha_decay=0,
+                 feature_transformer=None, num_states=None, num_actions=None):
         """
         Simple Q Learner with just observations as states. The action is
         associated with the last observation.
@@ -20,7 +21,12 @@ class QLearnerObsSingle:
             Discount factor.
         alpha_decay : float, default 0
             Learning rate alpha will decay at 1/_n_updates**_alpha_decay.
-
+        feature_transformer : object, default None
+            Object that transforms observations into states.
+        num_states : int
+            Number of states in env observation space.
+        num_actions : int
+            Number of actions in env action space.
 
         Attributes
         ----------
@@ -40,9 +46,14 @@ class QLearnerObsSingle:
         self.initial_alpha = initial_alpha
         self.gamma = gamma
         self._alpha_decay = alpha_decay
-        self.feature_transformer = ObservationAsStatesTransformer(env)
-        num_states = env.observation_space.n
-        num_actions = env.action_space.n
+        if feature_transformer is None:
+            self.feature_transformer = ObservationAsStatesTransformer(env)
+        else:
+            self.feature_transformer = feature_transformer
+        if num_states is None:
+            num_states = env.observation_space.n
+        if num_actions is None:
+            num_actions = env.action_space.n
         self.Q = np.random.uniform(low=0, high=0,
                                    size=(num_states, num_actions))
         self._n_updates = 0
@@ -133,19 +144,34 @@ class QLearnerObsSingle:
         """
         String representation of the model.
 
+        Uses `env` attribute to know observations and actions to show.
+
         Returns
         -------
         str
             A string showing the Q values of each state/action.
         """
-        gl_qvals = self.Q[0].round(2)
-        gr_qvals = self.Q[1].round(2)
-        st_qvals = self.Q[2].round(2)
+        env_class = self.env.__class__.__name__
+
         s = '\n'
-        s += '\n{: >10} \tOPEN LEFT | OPEN RIGHT | LISTEN'.format('')
-        s += '\n\t\t--------- | ---------- | ------'
-        s += '\nGROWL LEFT {: >14} | {: >10} | {: >6}'.format(*gl_qvals)
-        s += '\nGROWL RIGHT: {: >12} | {: >10} | {: >6}'.format(*gr_qvals)
-        s += '\nSTART: {: >18} | {: >10} | {: >6}'.format(*st_qvals)
+        if env_class == 'DummyEnv':
+            zero_qvals = self.Q[0].round(2)
+            one_qvals = self.Q[1].round(2)
+            s += '\n{: >6} \tACTION 0 | ACTION 1'.format('')
+            s += '\n\t-------- | --------'
+            s += '\nOBS 0 {:>10} | {:>8}'.format(*zero_qvals)
+            s += '\nOBS 1 {:>10} | {:>8}'.format(*one_qvals)
+        elif env_class == 'TigerEnv':
+            gl_qvals = self.Q[0].round(2)
+            gr_qvals = self.Q[1].round(2)
+            st_qvals = self.Q[2].round(2)
+            s += '\n{: >10} \tOPEN LEFT | OPEN RIGHT | LISTEN'.format('')
+            s += '\n\t\t--------- | ---------- | ------'
+            s += '\nGROWL LEFT {: >14} | {: >10} | {: >6}'.format(*gl_qvals)
+            s += '\nGROWL RIGHT: {: >12} | {: >10} | {: >6}'.format(*gr_qvals)
+            s += '\nSTART: {: >18} | {: >10} | {: >6}'.format(*st_qvals)
+        else:
+            raise ValueError('Don\'t know how to represent model for this env')
+
         s += '\n'
         return s

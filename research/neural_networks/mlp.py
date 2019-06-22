@@ -317,7 +317,7 @@ class MLP:
                 out = 'epoch: {}'.format(epoch)
                 out += ', loss: {:.2f}'.format(loss)
                 out += ', performance_metric: {:.4f}'.format(pm)
-                w_max = max([w.max() for w in model.W])
+                w_max = max([w.max() for w in self.W])
                 out += ', max weight: {:.3f}'.format(w_max)
                 out += ', max weight gradient: {}'.format(grad_max)
                 print(out)

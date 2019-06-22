@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from research.neural_networks.mlp import MLPRegressor, ReLU
 from copy import deepcopy
 
-from ...utils.tiger_env_utils import env_translate_obs, env_translate_action
+from ....utils.tiger_env_utils import env_translate_obs, env_translate_action
 
 
 class NumpySeqDQN:
@@ -37,7 +37,7 @@ class NumpySeqDQN:
                 layers is then defined by the length of this array.
             Z : research.neural_networks.mlp.Activation
                 Activation function.
-            lr : numeric, optional
+            learning_rate : numeric, optional
                 Neural network Learning rate.
             reg : numeric, optional
                 Neural network regularization parameter.
@@ -141,7 +141,7 @@ class NumpySeqDQN:
 
         return action_values.reshape(1, -1), qnet_Zs
 
-    def train(self, n):
+    def train(self, n, store_seq_counts=True):
         """
         Randomly selects a batch from experience replay and performs an
         iteration of gradient descent on the main Q network (hidden layers).
@@ -150,6 +150,8 @@ class NumpySeqDQN:
         ----------
         n : int
             Timestep.
+        store_seq_counts : bool, default True
+            Whether to store obs. sequence and action counts.
 
         Returns
         -------
@@ -166,49 +168,48 @@ class NumpySeqDQN:
         ##
         # Randomly select a sequence of observations from replay buffer.
         ##
-        valid_seq = False
-        while not valid_seq:
-            # Start of sequence timestep
-            nS = np.random.choice(num_exp - self.obs_seq_len - 1)
-            # End of sequence timestep
-            nE = nS + self.obs_seq_len
+        # Start of sequence timestep
+        nS = np.random.choice(num_exp - self.obs_seq_len - 1)
+        # End of sequence timestep
+        nE = nS + self.obs_seq_len
 
-            states = np.array(self.experience['s'][nS:nE])
-            flat_states = states.flatten().reshape(1, -1)
-            action = self.experience['a'][nE]
-            reward = np.array(self.experience['r'][nE]).flatten().reshape(-1)
-            next_states = np.array(self.experience['s2'][nS+1:nE+1])
-            flat_next_states = next_states.flatten().reshape(1, -1)
-            dones = self.experience['done'][nS:nE]
-            done = dones[-1]
-            # valid_seq = not any(dones)
-            valid_seq = True
+        states = np.array(self.experience['s'][nS:nE])
+        flat_states = states.flatten().reshape(1, -1)
+        action = self.experience['a'][nE]
+        reward = np.array(self.experience['r'][nE]).flatten().reshape(-1)
+        next_states = np.array(self.experience['s2'][nS+1:nE+1])
+        flat_next_states = next_states.flatten().reshape(1, -1)
+        dones = self.experience['done'][nS:nE]
+        done = dones[-1]
 
-        ##
-        # Update training observation sequence counts
-        ##
-        transl_obs = [env_translate_obs(o) for o in states]
-        transl_obs = ', '.join(transl_obs)
-        if transl_obs in self.train_obs_seq_counts:
-            self.train_obs_seq_counts[transl_obs] += 1
-        else:
-            self.train_obs_seq_counts[transl_obs] = 1
+        if store_seq_counts:
+            ##
+            # Update training observation sequence counts
+            ##
+            transl_obs = [env_translate_obs(o) for o in states]
+            transl_obs = ', '.join(transl_obs)
+            if transl_obs in self.train_obs_seq_counts:
+                self.train_obs_seq_counts[transl_obs] += 1
+            else:
+                self.train_obs_seq_counts[transl_obs] = 1
 
-        ##
-        # Update training observation sequence + action counts
-        ##
-        transl_act = env_translate_action(action)
-        obs_seq_act = ' => '.join([transl_obs, transl_act])
-        if obs_seq_act in self.train_obs_seq_action_counts:
-            self.train_obs_seq_action_counts[obs_seq_act] += 1
-        else:
-            self.train_obs_seq_action_counts[obs_seq_act] = 1
+            ##
+            # Update training observation sequence + action counts
+            ##
+            transl_act = env_translate_action(action)
+            obs_seq_act = ' => '.join([transl_obs, transl_act])
+            if obs_seq_act in self.train_obs_seq_action_counts:
+                self.train_obs_seq_action_counts[obs_seq_act] += 1
+            else:
+                self.train_obs_seq_action_counts[obs_seq_act] = 1
 
         ##
         # Compute predicted Q values using main network. These are the
         # "predictions".
         ##
         action_values, qnet_Zs = self.predict(flat_states)
+        # Note that best action is used to get Q value, but is not used when
+        # updating the model via backprop.
         Q = np.max(action_values, axis=1)
         best_action = np.argmax(action_values)
         Z = qnet_Zs[best_action]
@@ -236,7 +237,7 @@ class NumpySeqDQN:
         ##
         G = np.atleast_2d(G)
         Q = np.atleast_2d(Q)
-        self.mqnets[best_action].update(G, Q, Z)
+        self.mqnets[action].update(G, Q, Z)
 
     def add_experience(self, s, a, r, s2, done):
         """
@@ -311,10 +312,10 @@ class NumpySeqDQN:
         None
         """
         for i, mqnet in enumerate(self.mqnets):
-            self.tqnets[i] = mqnet
+            self.tqnets[i] = deepcopy(mqnet)
 
 
-def play_one(env, model, eps, gamma, copy_period):
+def play_one(env, model, eps, gamma, copy_period, store_seq_counts=True):
     """
     Plays a single episode. During play, the model is updated, and the total
     reward is accumulated and returned.
@@ -332,6 +333,8 @@ def play_one(env, model, eps, gamma, copy_period):
     copy_period : int
         The number of steps b/w each copy of main Q network to target Q
         network.
+    store_seq_counts : bool, default True
+        Whether to store obs. sequence and action counts.
 
     Returns
     -------
@@ -361,7 +364,7 @@ def play_one(env, model, eps, gamma, copy_period):
         # Update the model
         ##
         model.add_experience(prev_obs, action, reward, obs, done)
-        model.train(iters)
+        model.train(iters, store_seq_counts=store_seq_counts)
 
         iters += 1
 
