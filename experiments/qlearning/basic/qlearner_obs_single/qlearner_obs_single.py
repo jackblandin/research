@@ -154,7 +154,7 @@ class QLearnerObsSingle:
         env_class = self.env.__class__.__name__
 
         s = '\n'
-        if env_class == 'DummyEnv':
+        if env_class == 'GreaterThanZeroEnv':
             zero_qvals = self.Q[0].round(2)
             one_qvals = self.Q[1].round(2)
             s += '\n{: >6} \tACTION 0 | ACTION 1'.format('')

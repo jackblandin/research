@@ -277,7 +277,7 @@ class NumpyDQNObsSingle:
         env_class = self.env.__class__.__name__
 
         s = '\n'
-        if env_class == 'DummyEnv':
+        if env_class == 'GreaterThanZeroEnv':
             neg_one = self.predict([-1])[0].round(3)
             neg_half = self.predict([-.5])[0].round(3)
             zero = self.predict([0])[0].round(3)
