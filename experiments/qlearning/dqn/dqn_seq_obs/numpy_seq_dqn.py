@@ -264,14 +264,6 @@ class NumpySeqDQN:
         Q = np.atleast_2d(Q)
         G = np.atleast_2d(G)
 
-        _states = ','.join([str(states[0]), str(states[1])])
-        _next_states = ','.join([str(next_states[0]), str(next_states[1])])
-        data = [[nS, nS+1, _states, action, reward, _next_states, done, Q, next_Q, G]]
-        headers = ['nS', 'nS+1', 'states', 'action', 'reward', 'next_states', 'done', 'Q', 'next_Q', 'G']
-        from tabulate import tabulate
-        data = tabulate(data, headers=headers)
-        # print('\n' + data + '\n')
-
         self.mqnets[action].update(G, Q, Z)
 
     def add_experience(self, s, a, r, s2, done):
