@@ -166,9 +166,7 @@ class NumpyDQNObsSingle:
         action_values, qnet_Zs = self.predict(state)
         # Note that best action is used to get Q value, but is not used when
         # updating the model via backprop.
-        Q = np.max(action_values, axis=1)
         Q = action_values[:, action]
-        best_action = np.argmax(action_values)
         Z = qnet_Zs[action]
 
         ##
@@ -302,6 +300,9 @@ class NumpyDQNObsSingle:
             s += '\nGROWL LEFT {: >14} | {: >10} | {: >6}'.format(*gl_qvals)
             s += '\nGROWL RIGHT: {: >12} | {: >10} | {: >6}'.format(*gr_qvals)
             s += '\nSTART: {: >18} | {: >10} | {: >6}'.format(*st_qvals)
+        elif env_class == 'NotXOREnv':
+            s = self.env.q_values(self)
+            return s
         else:
             raise ValueError('Don\'t know how to represent model for this env')
 

@@ -8,13 +8,12 @@ Objectives
 Notes
 -----
 """
-
 import numpy as np
 import gym
 import matplotlib.pyplot as plt
-from research.neural_networks.mlp import MLPRegressor, ReLU
 from copy import deepcopy
 
+from research.neural_networks.mlp import MLPRegressor, ReLU
 from ....utils.tiger_env_utils import env_translate_obs, env_translate_action
 
 
@@ -25,6 +24,8 @@ class NumpySeqDQN:
 
     Parameters
     ----------
+    env : gym.Env
+        OpenAI Gym environment.
     D : int
         Number of components in the observation space.
     K : int
@@ -83,8 +84,9 @@ class NumpySeqDQN:
         only used for debugging.
     """
 
-    def __init__(self, D, K, hidden_layer_opts, gamma, obs_seq_len, start_obs,
-                 max_experiences=10000, min_experiences=5):
+    def __init__(self, env, D, K, hidden_layer_opts, gamma, obs_seq_len,
+                 start_obs, max_experiences=10000, min_experiences=5):
+        self.env = env
         self.K = K
         self.obs_seq_len = obs_seq_len
         self.max_experiences = max_experiences
@@ -108,9 +110,31 @@ class NumpySeqDQN:
         self.train_obs_seq_action_counts = {}
 
     def predict(self, obs_seq, use_target=False):
+        """Returns array of Q values where index is action and value is Q value
+        for taking the action.
+
+        This method is distinct from `_predict` in that
+        in that it doesn't return the Hidden layer outputs. This method exists
+        so that it conforms to the model.predict schemas of other model types.
+
+        Parameters
+        ----------
+        obs_seq : array-like, shape (D)
+            Input observation sequence.
+        use_target : bool, default False
+            If True, uses the target Q network to make predictions.
+
+        Returns
+        -------
+        list<numeric>, shape (K)
+            Action-value array.
         """
-        Returns an array where index is action and value is Q value for taking
-        the action.
+        preds = self._predict(obs_seq, use_target)[0]
+        return preds
+
+    def _predict(self, obs_seq, use_target=False):
+        """Returns an array where index is action and value is Q value for
+        taking the action.
 
         Parameters
         ----------
@@ -127,7 +151,10 @@ class NumpySeqDQN:
             list<np.ndarray>, shape (K)
                 Hidden layer outputs for ALL qnets.
         """
-        X = np.array(obs_seq).reshape(1, -1)
+        # Convert list of lists to array of arrays
+        X = np.array([np.array(obs) for obs in obs_seq])
+        # Flatten the sequences into single array
+        X = X.flatten().reshape(1, -1)
 
         action_values = np.zeros((len(self.tqnets)))
         qnet_Zs = [None for tqnet in self.tqnets]
@@ -157,6 +184,7 @@ class NumpySeqDQN:
         -------
         None
         """
+        seqlen = self.obs_seq_len  # Rename for convenience
         ##
         # Return early if we don't have enough experiences.
         ##
@@ -168,18 +196,18 @@ class NumpySeqDQN:
         ##
         # Randomly select a sequence of observations from replay buffer.
         ##
-        # Start of sequence timestep
-        nS = np.random.choice(num_exp - self.obs_seq_len - 1)
-        # End of sequence timestep
-        nE = nS + self.obs_seq_len
+        # Check that no "dones" are in the middle of the sequence.
+        invalid_seq = True
+        while invalid_seq:
+            # Start of sequence timestep
+            nS = np.random.choice(num_exp - seqlen - 1)
+            states = np.array(self.experience['s'][nS:nS+seqlen])
+            action = self.experience['a'][nS+seqlen-1]
+            reward = self.experience['r'][nS+seqlen-1]
+            next_states = self.experience['s2'][nS:nS+seqlen]
+            dones = self.experience['done'][nS:nS+1+seqlen]
+            invalid_seq = any(dones[0:-1])
 
-        states = np.array(self.experience['s'][nS:nE])
-        flat_states = states.flatten().reshape(1, -1)
-        action = self.experience['a'][nE]
-        reward = np.array(self.experience['r'][nE]).flatten().reshape(-1)
-        next_states = np.array(self.experience['s2'][nS+1:nE+1])
-        flat_next_states = next_states.flatten().reshape(1, -1)
-        dones = self.experience['done'][nS:nE]
         done = dones[-1]
 
         if store_seq_counts:
@@ -207,11 +235,7 @@ class NumpySeqDQN:
         # Compute predicted Q values using main network. These are the
         # "predictions".
         ##
-        action_values, qnet_Zs = self.predict(flat_states)
-        # NOTE 06/22/2019 - we are not using the BEST action to get the
-        # predicted Q value. When we made this change in NumpyDQNObsSingle, it
-        # was able to solve the GreaterThanZero-v0 environment. I have not yet
-        # figured out why using the best action doesn't work.
+        action_values, qnet_Zs = self._predict(states)
         Q = action_values[:, action]
         Z = qnet_Zs[action]
 
@@ -221,7 +245,8 @@ class NumpySeqDQN:
         # replay buffer. These values will used as the "target" values since
         # Q learning treats G=r+gamma*Q[n+1] as the target for Q[n].
         ##
-        next_action_values, _ = self.predict(flat_next_states, use_target=True)
+        next_action_values, _ = self._predict(next_states, use_target=True)
+        # Uses the best action, not the action taken.
         next_Q = np.max(next_action_values, axis=1)
 
         ##
@@ -236,8 +261,17 @@ class NumpySeqDQN:
         # Update the main network. Only need to update the nn for the action
         # that was taken.
         ##
-        G = np.atleast_2d(G)
         Q = np.atleast_2d(Q)
+        G = np.atleast_2d(G)
+
+        _states = ','.join([str(states[0]), str(states[1])])
+        _next_states = ','.join([str(next_states[0]), str(next_states[1])])
+        data = [[nS, nS+1, _states, action, reward, _next_states, done, Q, next_Q, G]]
+        headers = ['nS', 'nS+1', 'states', 'action', 'reward', 'next_states', 'done', 'Q', 'next_Q', 'G']
+        from tabulate import tabulate
+        data = tabulate(data, headers=headers)
+        # print('\n' + data + '\n')
+
         self.mqnets[action].update(G, Q, Z)
 
     def add_experience(self, s, a, r, s2, done):
@@ -301,7 +335,7 @@ class NumpySeqDQN:
         if np.random.random() < eps:
             return np.random.choice(self.K)
         else:
-            action_values, _ = self.predict(self.last_n_obs)
+            action_values, _ = self._predict(self.last_n_obs)
             action = np.argmax(action_values)
             return action
 
@@ -314,6 +348,29 @@ class NumpySeqDQN:
         """
         for i, mqnet in enumerate(self.mqnets):
             self.tqnets[i] = deepcopy(mqnet)
+
+    def __str__(self):
+        """String representation of the model.
+
+        Returns
+        -------
+        str
+            A string showing the Q values of each state/action.
+
+        Examples
+        --------
+        >>> model = NumpySeqDQN(D, K, hidden_layer_opts, gamma, obs_seq_len
+                                start_obs)
+        >>> print(model)
+        Obs. Seq      Action 0    Action 1
+        ----------  ----------  ----------
+        0,0            14.4307     14.1678
+        1,1            14.3387     14.2174
+        0,1            14.502      14.2673
+        1,0            14.323      14.0412
+        """
+        s = self.env.q_values(self)
+        return s
 
 
 def play_one(env, model, eps, gamma, copy_period, store_seq_counts=True):
@@ -415,15 +472,15 @@ def main(copy_period=50, obs_seq_len=2, hidden_layer_sizes=[10, 10], N=500):
     plot_running_avg(totalrewards)
 
 
-def running_avg(totalrewards, t):
-    return totalrewards[max(0, t-100):(t+1)].mean()
+def running_avg(totalrewards, t, window):
+    return totalrewards[max(0, t-window):(t+1)].mean()
 
 
-def plot_running_avg(totalrewards):
+def plot_running_avg(totalrewards, window):
     N = len(totalrewards)
     ravg = np.empty(N)
     for t in range(N):
-        ravg[t] = running_avg(totalrewards, t)
+        ravg[t] = running_avg(totalrewards, t, window)
     plt.plot(ravg)
     plt.title('Running Average')
     plt.show()
