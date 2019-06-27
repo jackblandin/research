@@ -21,7 +21,7 @@ dependencies:
     - setuptools==40.6.3
     # - git+https://github.com/jackblandin/gym-tiger.git  # Use when not env is stable
     # - git+https://github.com/jackblandin/gym-dummy.git  # Use when not env is stable
-    # - file:///Users/JBlandin/my/research/openai/custom_envs/gym-tiger  # use when editing locally
+    - file:///Users/JBlandin/my/research/openai/custom_envs/gym-tiger  # use when editing locally
     - file:///Users/JBlandin/my/research/openai/custom_envs/gym-dummy  # use when editing locally
     # PyPI - Doesn't work unless locally pip installed
     # - gym-dummy==0.0.2

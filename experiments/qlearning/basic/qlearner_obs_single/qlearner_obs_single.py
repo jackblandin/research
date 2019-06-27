@@ -162,14 +162,14 @@ class QLearnerObsSingle:
             s += '\nOBS 0 {:>10} | {:>8}'.format(*zero_qvals)
             s += '\nOBS 1 {:>10} | {:>8}'.format(*one_qvals)
         elif env_class == 'TigerEnv':
-            gl_qvals = self.Q[0].round(2)
-            gr_qvals = self.Q[1].round(2)
-            st_qvals = self.Q[2].round(2)
+            st_qvals = self.Q[0].round(2)
+            gl_qvals = self.Q[1].round(2)
+            gr_qvals = self.Q[2].round(2)
             s += '\n{: >10} \tOPEN LEFT | OPEN RIGHT | LISTEN'.format('')
             s += '\n\t\t--------- | ---------- | ------'
+            s += '\nSTART: {: >18} | {: >10} | {: >6}'.format(*st_qvals)
             s += '\nGROWL LEFT {: >14} | {: >10} | {: >6}'.format(*gl_qvals)
             s += '\nGROWL RIGHT: {: >12} | {: >10} | {: >6}'.format(*gr_qvals)
-            s += '\nSTART: {: >18} | {: >10} | {: >6}'.format(*st_qvals)
         else:
             raise ValueError('Don\'t know how to represent model for this env')
 

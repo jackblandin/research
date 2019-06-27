@@ -22,3 +22,10 @@ jupyter notebook
 ```
 
 Then when you're in the Jupyter Notebook, select `Kernel > Change Kernel > conda (rlpomdp)`.
+
+# Release history
+
+Version | Date | Description
+--- | --- | ---
+0.0.1 | - | Initial release
+0.0.2 | 06/27/2019 | Use integer observations instead of one-hots.
