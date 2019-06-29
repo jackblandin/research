@@ -1,6 +1,5 @@
 import numpy as np
-
-from ....utils.tiger_env_utils import env_translate_obs, env_translate_action
+from tabulate import tabulate
 
 
 class QLearnerObsSeq:
@@ -152,7 +151,7 @@ class QLearnerObsSeq:
 
         if self.translate:
             # Update training observation sequence counts
-            transl_obs = [env_translate_obs(o) for o in self.last_n_obs]
+            transl_obs = [self.env.translate_obs(o) for o in self.last_n_obs]
             transl_obs = ', '.join(transl_obs)
             if transl_obs in self.train_obs_seq_counts:
                 self.train_obs_seq_counts[transl_obs] += 1
@@ -162,7 +161,7 @@ class QLearnerObsSeq:
             ##
             # Update training observation sequence + action counts
             ##
-            transl_act = env_translate_action(at)
+            transl_act = self.env.translate_action(at)
             obs_seq_act = ' => '.join([transl_obs, transl_act])
             if obs_seq_act in self.train_obs_seq_action_counts:
                 self.train_obs_seq_action_counts[obs_seq_act] += 1
@@ -200,23 +199,21 @@ class QLearnerObsSeq:
         str
             A string showing the Q values of each state/action.
         """
+        actions = [0, 1, 2]
         s = '\n'
-        s += '\n{:<47} | OPEN LEFT | OPEN RIGHT | LISTEN'.format(' ')
-        s += '\n{} | --------- | ---------- | ------'.format('-'*47)
-        o_seq_as_strs = []
-        for o_seq_idx in range(self.Q.shape[0]):
-            seq_str = self.feature_transformer._reverse_lookup[o_seq_idx]
-            grouped = zip(*(iter(seq_str),) * self.env.observation_space.n)
-            grouped = np.asarray(list(grouped)).astype(int)
-            grouped = [self.env.translate_obs(g) for g in grouped]
-            o_seq_as_strs.append(grouped)
-        for idx, o_str in enumerate(o_seq_as_strs):
-            action_qs = self.Q[idx]
-            if not any([q != 0 for q in action_qs]):
-                continue
-            o_seq_as_strs
-            s += '\n{:<47} {:>11} | {:>10} | {:>6}'.format(
-                str(o_str), action_qs[0].round(1), action_qs[1].round(1),
-                action_qs[2].round(1))
-        s += '\n\n'
+        obs_seqs = self.feature_transformer.inverse_lookup_.values()
+        rows = []
+        for obs_seq in obs_seqs:
+            row = np.empty((len(actions)+1), dtype=object)
+            obs_seq_ = [self.env.translate_obs(o) for o in obs_seq]
+            row[0] = obs_seq_
+            for a in actions:
+                obs_seq_t = self.feature_transformer.transform(obs_seq)
+                Q = self.Q[obs_seq_t, a].round(2)
+                row[a+1] = Q
+            rows.append(row)
+
+        actions_ = [self.env.translate_action(a) for a in actions]
+        s += tabulate(rows, headers=(['Previous Observations'] + actions_))
+        s += '\n'
         return s

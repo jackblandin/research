@@ -27,6 +27,7 @@ class SeqFeatureTransformer:
     def __init__(self):
         self.idx_lookup_ = {}
         self.next_idx_ = 0
+        self.inverse_lookup_ = {}
 
     def transform(self, X):
         """Transforms observations into string representations.
@@ -48,7 +49,26 @@ class SeqFeatureTransformer:
         if X_t not in self.idx_lookup_:
             self.idx_lookup_[X_t] = self.next_idx_
             self.next_idx_ += 1
+            self.inverse_lookup_[self.idx_lookup_[X_t]] = X
         return self.idx_lookup_[X_t]
+
+    def inverse_transform(self, idx):
+        """Untransforms integer index into original observaion sequence.
+
+        Parameters
+        ----------
+        idx : int
+            Index of string representation of observation sequence.
+
+        Returns
+        -------
+        list or None
+            Original observation array.
+        """
+        if idx not in self.inverse_lookup_:
+            return None
+        else:
+            return self.inverse_lookup_[idx]
 
 
 class SeqArrayToSortedStringTransformer:
