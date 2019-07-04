@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from tabulate import tabulate
+from IPython.display import display
 
 
 class QLearnerObsActSeq:
@@ -244,35 +244,32 @@ class QLearnerObsActSeq:
         self.history = np.vstack([self.history, np.array([t, at, ot],
                                                          dtype=object)])
 
-    def __str__(self):
+    def to_df(self):
         """
-        String representation of the model.
+        DataFrame representation of model Q values.
 
         Returns
         -------
-        str
-            A string showing the Q values of each state/action.
+        pandas.DataFrame
+            A dataframe showing the Q values of each state/action.
         """
         env_class = self.env.__class__.__name__
 
-        s = '\n'
         if env_class == 'TigerEnv':
             actions = [0, 1, 2]
+            actions_ = [self.env.translate_action(a1) for a1 in actions]
             obs_act_seqs = self.feature_transformer.inverse_lookup_.values()
             rows = []
             for obs_act_seq in obs_act_seqs:
                 if len(obs_act_seq) == 0:
                     continue
-                row = np.empty((len(actions)+1), dtype=object)
-                state = ''
+                row = []
                 for i, obs_act in enumerate(obs_act_seq):
-                    if i > 0:
-                        state += ' -- '
                     o0, a0 = obs_act
                     o0_ = self.env.translate_obs(o0)
                     a0_ = self.env.translate_action(a0)
-                    state += (a0_ + '-' + o0_)
-                row[0] = state
+                    row.append(a0_)
+                    row.append(o0_)
                 best_Q = None
                 best_action = None
                 for a1 in actions:
@@ -280,19 +277,28 @@ class QLearnerObsActSeq:
                     Q = self.Q[oa_seq_t, a1].round(2)
                     Q_update_count = int(self.Q_update_counts_[oa_seq_t, a1])
                     Qval = str(Q)
-                    # Qval = Q + ' : ' + str(Q_update_count)
                     if best_Q is None or Q > best_Q:
                         best_Q = Q
                         best_action = a1
-                    row[a1+1] = Qval
-                row[best_action+1] += ' <<'
+                    row.append(Qval)
+                    row.append(Q_update_count)
+                if best_Q == 0:
+                    continue
+                row.append(actions_[best_action])
                 rows.append(row)
 
-            actions_ = [self.env.translate_action(a1) for a1 in actions]
-            s += tabulate(rows, headers=(['Previous Action, Observation'] +
-                                         actions_))
-            s += '\n'
-            return s
+            update_counts_ = [a + ' UPDATE COUNT' for a in actions_]
+            Q_columns = []
+            for a, u in zip(actions_, update_counts_):
+                Q_columns.append(a + ' Q VALUE')
+                Q_columns.append(u)
+            columns = []
+            for i in range(self.seq_len):
+                columns.append('a_t-{}'.format(self.seq_len-i))
+                columns.append('o_t-{}'.format(self.seq_len-i-1))
+            columns += Q_columns + ['BEST ACTION']
+            df = pd.DataFrame(rows, columns=columns)
+            return df
         else:
             raise ValueError('Don\'t know how to represent this env.')
 

@@ -206,11 +206,19 @@ class QLearnerObsSeq:
         for obs_seq in obs_seqs:
             row = np.empty((len(actions)+1), dtype=object)
             obs_seq_ = [self.env.translate_obs(o) for o in obs_seq]
+            if 'START' in obs_seq_ or len(obs_seq_) < self.seq_len:
+                continue
             row[0] = obs_seq_
+            best_Q = None
+            best_action = None
             for a in actions:
                 obs_seq_t = self.feature_transformer.transform(obs_seq)
                 Q = self.Q[obs_seq_t, a].round(2)
-                row[a+1] = Q
+                if best_Q is None or Q > best_Q:
+                    best_Q = Q
+                    best_action = a
+                row[a+1] = str(Q)
+            row[best_action+1] += ' <<'
             rows.append(row)
 
         actions_ = [self.env.translate_action(a) for a in actions]
