@@ -408,20 +408,16 @@ class MLP:
                                           key=abs)))
 
             # Adjust gradients with regularization
-            dJdW_i = dJdW_i + reg*W[i]
-            dJdb_i = dJdb_i + reg*b[i]
+            dJdW_i = dJdW_i - reg*W[i]
+            dJdb_i = dJdb_i - reg*b[i]
 
-            # Update momentums
+            # Update momentums (velocities)
             self.vW_[i] = mu*vW_i + learning_rate*dJdW_i
             self.vb_[i] = mu*vb_i + learning_rate*dJdb_i
 
-            # Compute final weight and bias updates
-            w_update = mu*self.vW_[i] + learning_rate*dJdW_i
-            b_update = mu*self.vb_[i] + learning_rate*dJdb_i
-
             # Update weights
-            self.W[i] -= w_update
-            self.b[i] -= b_update
+            self.W[i] -= self.vW_[i]
+            self.b[i] -= self.vb_[i]
 
         return grad_max
 
