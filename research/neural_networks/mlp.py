@@ -13,21 +13,16 @@ class MLP:
     ----------
     D : int
         Input dimension.
-    hidden_layer_sizes : array-like
-        Hidden layer sizes. An array of integers.
     K : int
         Number of output classes.
+    hidden_layer_sizes : array-like
+        Hidden layer sizes. An array of integers.
     Z : Activation
         Activation function.
+    optimizer : Optimizer
+        Optimizer.
     learning_rate : numeric
         Learning rate.
-    reg : numeric, default 0
-        Regularization parameter.
-    mu : numeric, default 0
-        Momentum parameter.
-    clip_thresh : numeric, default np.inf
-        Maximum weight/bias gradient allowed. If gradient is larger than
-        clip_thresh, the gradient is replaced with clip_thresh.
 
     Attributes
     ----------
@@ -35,16 +30,11 @@ class MLP:
         Number of hidden layers, defined by length of hidden_layer_sizes.
     M : list, length (n_layers+2)
         Hidden layer sizes, with M[0] set to D and M[-1] set to K. This makes
-        computing
-        recursive forward and back propagation easier.
+        computing recursive forward and back propagation easier.
     W : list, shape (len(M)+1)
         List of weight matrices.
     b : list, shape (len(M)+1)
         List of bias vectors.
-    vW_ : list, shape (len(M)+1)
-        List of weight momentums. Same shapes as matrices in W.
-    vb_ : list, shape (len(M)+1)
-        List of bias momentums. Same shapes as bias vectors.
 
     Examples
     --------
@@ -52,28 +42,25 @@ class MLP:
     >>> K = Y_train.shape[0]
     >>> hidden_layer_sizes = [5, 5]
     >>> Z = Sigmoid()
-    >>> model = FeedForward(D, hidden_layer_sizes, K, Z)
+    >>> opt = MomentumOptimizer(hidden_layer_sizes, mu=.5)
+    >>> model = MLP(D, hidden_layer_sizes, K, Z, opt, learning_rate=.001)
     >>> model.fit(X_train, Y_train)
     >>> preds, _ = model.forward(X_test)
     """
 
-    def __init__(self, D, hidden_layer_sizes, K, Z, learning_rate=1e-5,
-                 reg=0, mu=0, clip_thresh=np.inf):
+    def __init__(self, D, K, hidden_layer_sizes, Z, optimizer,
+                 learning_rate=1e-5, reg=0, mu=0, clip_thresh=np.inf):
         self.D = D
         self.K = K
         self.Z = Z
+        self.optimizer = optimizer
         self.learning_rate = learning_rate
-        self.reg = reg
-        self.mu = mu
-        self.clip_thresh = clip_thresh
         self.n_layers_ = len(hidden_layer_sizes)
         self.M = [D] + hidden_layer_sizes + [K]
         n_layers = self.n_layers_
         M = self.M
         self.W = [None for i in range(n_layers+1)]
         self.b = [None for i in range(n_layers+1)]
-        self.vW_ = [None for i in range(n_layers+1)]
-        self.vb_ = [None for i in range(n_layers+1)]
 
         # Randomly initialize weights
         # Normalize with 1/sqrt(D)
@@ -81,11 +68,6 @@ class MLP:
         for i in range(n_layers+1):
             self.W[i] = norm*np.random.randn(M[i], M[i+1])
             self.b[i] = norm*np.random.randn(M[i+1])
-
-        # Initialize momentums
-        for i in range(n_layers+1):
-            self.vW_[i] = np.zeros((M[i], M[i+1]))
-            self.vb_[i] = np.zeros((M[i+1]))
 
     def __copy__(self):
         """Returns a copy of self.
@@ -263,7 +245,7 @@ class MLP:
         ----------
         T : np.ndarray, shape (K,)
             Targets
-        Y : np.ndarray, shape (K,)
+        Output : np.ndarray, shape (K,)
             Predictions
         _Z : list<np.ndarray>, shape (n_layer+1)
             Outputs at each layer
@@ -272,54 +254,32 @@ class MLP:
         numeric
             Max gradient update (for debugging during training).
         """
+        opt = self.optimizer
         n_layers = self.n_layers_
-        learning_rate = self.learning_rate
-        reg = self.reg
-        mu = self.mu
 
         # For each layer, iterating backwards from final layer, compute
         # deltas, weight partials, and update weights/biases.
         Delta = [None for i in range(n_layers+1)]
         grad_max = 0
         for i in range(n_layers, -1, -1):
-            clip_thresh = self.clip_thresh
-            W = self.W
-            b = self.b
-            vW_i = self.vW_[i]
-            vb_i = self.vb_[i]
-
             if i == n_layers:
                 # Compute delta at final layer
                 Delta[i] = self._backprop_delta_final_layer(T, Output)
             else:
                 # Compute deltas at middle layer
-                Delta[i] = self._backprop_delta(Delta[i+1], W[i+1], _Z[i+1], i)
+                Delta[i] = self._backprop_delta(Delta[i+1], self.W[i+1],
+                                                _Z[i+1], i)
 
             # Compute weight and bias partial gradients
             dJdW_i = self._dJdW(_Z[i], Delta[i], i)
             dJdb_i = self._dJdb(Delta[i], i)
 
-            # Clip gradients that are too large
-            dJdW_i[dJdW_i > clip_thresh] = clip_thresh
-            dJdW_i[dJdW_i < -1*clip_thresh] = -1*clip_thresh
-            dJdb_i[dJdb_i > clip_thresh] = clip_thresh
-            dJdb_i[dJdb_i < -1*clip_thresh] = -1*clip_thresh
-
-            # Compute max gradient update (for debugging)
-            grad_max = max((grad_max, max(dJdW_i.max(), dJdW_i.min(),
-                                          key=abs)))
-
-            # Adjust gradients with regularization
-            dJdW_i = dJdW_i - reg*W[i]
-            dJdb_i = dJdb_i - reg*b[i]
-
-            # Update momentums (velocities)
-            self.vW_[i] = mu*vW_i + learning_rate*dJdW_i
-            self.vb_[i] = mu*vb_i + learning_rate*dJdb_i
+            w_update, b_update, grad_max = opt.layer_update(self, i, dJdW_i,
+                                                            dJdb_i, grad_max)
 
             # Update weights
-            self.W[i] -= self.vW_[i]
-            self.b[i] -= self.vb_[i]
+            self.W[i] -= w_update
+            self.b[i] -= b_update
 
         return grad_max
 
