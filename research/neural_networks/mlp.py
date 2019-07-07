@@ -21,8 +21,6 @@ class MLP:
         Activation function.
     optimizer : Optimizer
         Optimizer.
-    learning_rate : numeric
-        Learning rate.
 
     Attributes
     ----------
@@ -42,19 +40,17 @@ class MLP:
     >>> K = Y_train.shape[0]
     >>> hidden_layer_sizes = [5, 5]
     >>> Z = Sigmoid()
-    >>> opt = MomentumOptimizer(hidden_layer_sizes, mu=.5)
-    >>> model = MLP(D, hidden_layer_sizes, K, Z, opt, learning_rate=.001)
+    >>> opt = MomentumOptimizer(hidden_layer_sizes, lr=.001, mu=.5)
+    >>> model = MLP(D, hidden_layer_sizes, K, Z, opt)
     >>> model.fit(X_train, Y_train)
     >>> preds, _ = model.forward(X_test)
     """
 
-    def __init__(self, D, K, hidden_layer_sizes, Z, optimizer,
-                 learning_rate=1e-5, reg=0, mu=0, clip_thresh=np.inf):
+    def __init__(self, D, K, hidden_layer_sizes, Z, optimizer):
         self.D = D
         self.K = K
         self.Z = Z
         self.optimizer = optimizer
-        self.learning_rate = learning_rate
         self.n_layers_ = len(hidden_layer_sizes)
         self.M = [D] + hidden_layer_sizes + [K]
         n_layers = self.n_layers_
