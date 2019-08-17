@@ -77,4 +77,6 @@ def plot_running_avg(totalrewards, window, figsize=(20, 5)):
         running_avg[t] = totalrewards[max(0, t-window):(t+1)].mean()
     fig, ax = plt.subplots(1, 1, figsize=figsize)
     ax.plot(running_avg)
+    # Plot y=0
+    ax.plot([idx for idx in range(N)], np.zeros(N), c='r')
     ax.set_title("Running Average")
