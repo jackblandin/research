@@ -4,3 +4,4 @@ experiments/**/logs/*
 */**/data/**/*.csv
 dist/
 *egg-info/
+*.DS_Store
