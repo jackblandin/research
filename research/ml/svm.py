@@ -212,7 +212,7 @@ class SVM(BaseEstimator, ClassifierMixin):
     >>> # Fit SVM and plot decision boundary.
     >>> svm = SVM()
     >>> svm.fit(X, y)
-    >>> svm.plot(X, y)
+    >>> svm.plot_discriminants(X, y)
 
     Nonlinear Example
     >>> # Generate random x1, x2 values over [0, 1]^2 range
@@ -228,7 +228,8 @@ class SVM(BaseEstimator, ClassifierMixin):
     >>> # Fit SVM and plot decision boundary.
     >>> svm = SVM(kernel='polynomial', degree=2)
     >>> svm.fit(X, y)
-    >>> svm.plot(X, y)
+    >>> svm.plot_decision_boundary(X, y)
+    >>> svm.plot_discriminants(X, y)
     """
     def __init__(self, kernel='linear', **kernel_args):
 
@@ -343,7 +344,7 @@ class SVM(BaseEstimator, ClassifierMixin):
 
         return yhat
 
-    def plot(self, X, y):
+    def plot_decision_boundary(self, X, y):
         """Plots H, H+, H-, as well as support vectors.
 
         Parameters
@@ -367,7 +368,7 @@ class SVM(BaseEstimator, ClassifierMixin):
         Hneg = _X[np.where((np.abs(g) > -(1 + TOL))
                            & (np.abs(g) < (-1 + TOL)))]
         # Plot
-        fig, ax = plt.subplots(1, 1, figsize=(14, 10))
+        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
         C1 = X[np.where(y == 1)]
         C2 = X[np.where(y == -1)]
         ax.scatter(C1[:, 0], C1[:, 1], label='C1', marker='x')
@@ -382,6 +383,54 @@ class SVM(BaseEstimator, ClassifierMixin):
         ax.set_xlim([-.1, 1])
         ax.set_ylim([-.1, 1.2])
         plt.show()
+        return None
+
+    def plot_discriminants(self, X, y):
+        """Plots values of g as "heat" map.
+
+        Parameters
+        ----------
+        X : np.ndarray, shape(n, m)
+            Inputs.
+        y : np.array, shape(n)
+            Targets.
+
+        Returns
+        -------
+        None
+        """
+        y[y == 0] = -1
+        _X = np.random.rand(75_000, self.sup_X_.shape[1])
+        g = self._compute_discriminant(_X)
+        TOL = .03
+        H = _X[np.where(np.abs(g) < TOL)]
+        Hpos = _X[np.where((np.abs(g) < 1 + TOL) & (np.abs(g) > 1 - TOL))]
+        Hneg = _X[np.where((np.abs(g) > -(1 + TOL))
+                           & (np.abs(g) < (-1 + TOL)))]
+        # Plot
+        fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 15))
+
+        C1_idx = np.where(y == 1)
+        C2_idx = np.where(y == -1)
+
+        C1g = g[C1_idx]
+        C2g = g[C2_idx]
+
+        sns.kdeplot(g, ax=ax0, label='g(x)')
+        sns.kdeplot(C1g, ax=ax0, label='C1')
+        sns.kdeplot(C2g, ax=ax0, label='C2')
+        ax0.set_title('Distribution of g(x) values')
+
+        sv = self.sup_X_
+        ax1.scatter(sv[:, 0], sv[:, 1], label='SV', marker='*', s=300)
+        ax1.scatter(H[:, 0], H[:, 1], label='H', s=20)
+        ax1.scatter(Hpos[:, 0], Hpos[:, 1], label='H+', s=10)
+        ax1.scatter(Hneg[:, 0], Hneg[:, 1], label='H-', s=10)
+        ax1.scatter(_X[:, 0], _X[:, 1], c=g, label='g(x)', s=1, alpha=.3)
+        ax1.legend()
+        ax1.set_title('Discriminant value')
+        ax1.set_xlim([-.1, 1])
+        ax1.set_ylim([-.1, 1.2])
         return None
 
     def _loss(self, alphas, _X, y, verbose=False):
