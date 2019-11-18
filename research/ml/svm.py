@@ -18,6 +18,40 @@ class Kernel:
         raise NotImplementedError()
 
 
+class GaussianKernel(Kernel):
+    """Gaussian kernel: exp[-||xi-xj||**2 / radius**2)]
+
+    Parameters
+    ----------
+    radius : int, default 1
+        Radius (sigma). Must be greater than zero.
+    """
+
+    def __init__(self, radius=1):
+        if radius <= 0:
+            raise ValueError('radius must be greater than zero.')
+        self.radius = radius
+        self.name = 'gaussian'
+
+    def transform(self, xi, xj):
+        """Computes Gaussian distance.
+
+        Parameters
+        ----------
+        xi : array-like, shape(m)
+            Input.
+        xj : array-like, shape(m)
+            Input.
+
+        Returns
+        -------
+        float
+            Gaussian distance.
+        """
+        norm = np.linalg.norm(xi-xj)
+        return np.exp(-norm**2 / self.radius**2)
+
+
 class LinearKernel(Kernel):
     """Linear kernel: <xi,xj>"""
 
@@ -74,23 +108,14 @@ class PolynomialKernel(Kernel):
         return (1+xi.dot(xj))**self.degree
 
 
-class GaussianKernel(Kernel):
-    """Gaussian kernel: exp[-||xi-xj||**2 / radius**2)]
-
-    Parameters
-    ----------
-    radius : int, default 1
-        Radius (sigma). Must be greater than zero.
-    """
+class SigmoidKernel(Kernel):
+    """Sigmoid kernel: 1 / (1 + np.exp(-A))"""
 
     def __init__(self, radius=1):
-        if radius <= 0:
-            raise ValueError('radius must be greater than zero.')
-        self.radius = radius
-        self.name = 'gaussian'
+        self.name = 'sigmoid'
 
     def transform(self, xi, xj):
-        """Computes Gaussian distance.
+        """Computes Sigmoid distance.
 
         Parameters
         ----------
@@ -102,16 +127,41 @@ class GaussianKernel(Kernel):
         Returns
         -------
         float
-            Gaussian distance.
+            Sigmoid distance.
         """
-        norm = np.linalg.norm(xi-xj)
-        return np.exp(-norm**2 / self.radius**2)
+        return 1 / (1 + np.exp(-xi.dot(xj)))
+
+
+class TanHKernel(Kernel):
+    """Hyperbolic Tangent kernel: tanh(xi*xj)"""
+
+    def __init__(self, radius=1):
+        self.name = 'tanh'
+
+    def transform(self, xi, xj):
+        """Computes TanH distance.
+
+        Parameters
+        ----------
+        xi : array-like, shape(m)
+            Input.
+        xj : array-like, shape(m)
+            Input.
+
+        Returns
+        -------
+        float
+            TanH distance.
+        """
+        return np.tanh(xi.dot(xj))
 
 
 KERNEL_MAP = {
+    'gaussian': GaussianKernel,
     'linear': LinearKernel,
     'polynomial': PolynomialKernel,
-    'gaussian': GaussianKernel,
+    'sigmoid': SigmoidKernel,
+    'tanh': TanHKernel,
 }
 
 
@@ -122,7 +172,7 @@ class SVM(BaseEstimator, ClassifierMixin):
     ----------
     kernel : str or function
         Kernel function.
-        If str, must be 'linear', 'polynomial', or 'gaussian'.
+        If str, must be 'gaussian', 'linear', 'polynomial', 'sigmoid', 'tanh'.
         If function, format is function(x, y) -> float
     **kernel_args
         Additional arguments to pass into kernel functions.
@@ -310,7 +360,7 @@ class SVM(BaseEstimator, ClassifierMixin):
         Hneg = _X[np.where((np.abs(g) > -(1 + TOL))
                            & (np.abs(g) < (-1 + TOL)))]
         # Plot
-        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+        fig, ax = plt.subplots(1, 1, figsize=(14, 10))
         C1 = X[np.where(y == 1)]
         C2 = X[np.where(y == -1)]
         ax.scatter(C1[:, 0], C1[:, 1], label='C1', marker='x')
