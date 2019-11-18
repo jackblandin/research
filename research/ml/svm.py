@@ -21,13 +21,19 @@ class Kernel:
 class GaussianKernel(Kernel):
     """Gaussian kernel: exp[-||xi-xj||**2 / radius**2)]
 
+    Useful for complex decision boundaries. Decrease radius to fit more complex
+    boundaries.
+
     Parameters
     ----------
-    radius : int, default 1
-        Radius (sigma). Must be greater than zero.
+    radius : int, default .5
+        Radius (sigma). Must be greater than zero. Lower values allow for more
+        flexible classifiers, at the risk of overfitting. Large radius values
+        gradually reduce the kernel to a continuous function, thereby limitting
+        the ability of the kernel to fit complex boundaries.
     """
 
-    def __init__(self, radius=1):
+    def __init__(self, radius=.5):
         if radius <= 0:
             raise ValueError('radius must be greater than zero.')
         self.radius = radius
@@ -83,7 +89,8 @@ class PolynomialKernel(Kernel):
     Parameters
     ----------
     degree : int, default 2
-        Polynomial degree.
+        Polynomial degree. Higher values allow for more complex decision
+        boundaries to be fitted. Cannot learn disjoint boundaries.
     """
 
     def __init__(self, degree=2):
