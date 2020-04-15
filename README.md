@@ -1,7 +1,7 @@
 # Research
 
 ## Description
-Research on the effectiveness and improvement of **Reinforcement Learning** algorithms in **partially observable** environments.
+Various implementations of existing machine learning and reinforcement learning algorithms. These algorithms are meant for personal instructive purposes rather and should never be used in a production setting.
 
 ## Setup
 
@@ -15,7 +15,7 @@ conda env create -f=conda.yaml
 conda activate rlpomdp
 
 # Create an IPython kernel which will allow you to run the Jupyter Notebook in the conda environment
-python3.6 -m ipykernel install --user --name research --display-name "research"
+python3.6 -m ipykernel install --user --name research
 
 # Start the jupyter notebook
 jupyter notebook
