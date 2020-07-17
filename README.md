@@ -21,7 +21,7 @@ python3.6 -m ipykernel install --user --name research
 jupyter notebook
 ```
 
-Then when you're in the Jupyter Notebook, select `Kernel > Change Kernel > conda (research)`.
+Then when you're in the Jupyter Notebook, select `Kernel > Change Kernel > research`.
 
 # Release history
 
