@@ -27,5 +27,5 @@ Then when you're in the Jupyter Notebook, select `Kernel > Change Kernel > resea
 
 Version | Date | Description
 --- | --- | ---
-0.0.2 | 06/27/2019 | Use integer observations instead of one-hots.
-0.0.1 | - | Initial release
+0.2.0 | 02/12/2022 | Add RL algorithms as part of research module.
+0.1.4 | 06/14/2019 | Initial stable release.
