@@ -17,7 +17,6 @@ setup(
                       'matplotlib',
                       'numpy>=1.15.4',
                       'pandas>=0.24.1',
-                      'python==3.6.8',
                       'scikit-learn>=0.20.3',
                       'scipy',
                       'seaborn',
