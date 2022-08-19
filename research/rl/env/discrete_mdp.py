@@ -14,7 +14,7 @@ class DiscreteMDP(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, state_dims, action_dims, obs_dims,
-            max_steps_per_episode, verbose=False):
+            max_steps_per_episode, verbose=False, args={}):
         """
         Generic environment for a discrete MDP. This class includes helper
         methods for computing transitions, observations, and rewards. Can also
@@ -34,6 +34,10 @@ class DiscreteMDP(gym.Env):
             episode lasts, since the environment does not end otherwise.
         verbose : bool, default False
             If True, log current state on each timestep.
+        args : dict, default {}
+            Any extra parameters needed for specific environments. Useful so
+            that child classes don't need to modify their __init__ method when
+            they want additional arguments.
 
         Attributes
         ----------
@@ -104,6 +108,7 @@ class DiscreteMDP(gym.Env):
         self.state_dims = state_dims
         self.action_dims = action_dims
         self.obs_dims = obs_dims
+        self.args = args
 
         # These need to come before the _construct methods
         self.n_states = np.prod(self.state_dims)
