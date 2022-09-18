@@ -14,7 +14,8 @@ class DiscreteMDP(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, state_dims, action_dims, obs_dims,
-            max_steps_per_episode, verbose=False, args={}):
+            max_steps_per_episode, verbose=False, args={}, T=None, Osaso=None,
+            Rsas=None):
         """
         Generic environment for a discrete MDP. This class includes helper
         methods for computing transitions, observations, and rewards. Can also
@@ -128,34 +129,52 @@ class DiscreteMDP(gym.Env):
         # Build observation hash
         self._construct_obs_feat_lookups()
 
+        # print('_feats_to_state')
+        # display(self._feats_to_state)
+        # print('_state_to_feats')
+        # display(self._state_to_feats)
+
         # Build initial state vector mu0 from injected method
         self.mu0 = np.array([
             self._init_state_probability(s) for s in range(self.n_states)
         ])
 
-        # Build transition matrix T from injected method
-        self.T = np.array([
-            [self._transition_probability(s, a) for a in range(self.n_actions)]
-            for s in range(self.n_states)])
+        if T is not None:
+            self.T = T
+        else:
+            # Build transition matrix T from injected method
+            print('Constructing transition matrix...')
+            self.T = np.array([
+                [self._transition_probability(s, a) for a in range(self.n_actions)]
+                for s in range(self.n_states)])
 
-        # Build observation matrix Osaso from injected method
-        self.Osaso = np.array([
-            np.array([
+        if Osaso is not None:
+            self.Osaso = Osaso
+        else:
+            # Build observation matrix Osaso from injected method
+            print('Constructing observation matrix...')
+            self.Osaso = np.array([
                 np.array([
-                    self._observation_probability(s, a, sp) for sp in range(self.n_states)
-                ]) for a in range(self.n_actions)
-            ]) for s in range(self.n_states)
-        ])
-
-        # Build reward matrix Rsas from injected method.
-        self.Rsas = np.array([
-            np.array([
-                np.array([
-                    self._reward_sas(s, a, sp) for sp in range(self.n_states)
+                    np.array([
+                        self._observation_probability(s, a, sp) for sp in range(self.n_states)
                     ]) for a in range(self.n_actions)
-            ]) for s in range(self.n_states)
-        ])
+                ]) for s in range(self.n_states)
+            ])
 
+        if Rsas is not None:
+            self.Rsas = Rsas
+        else:
+            # Build reward matrix Rsas from injected method.
+            print('Constructing reward matrix...')
+            self.Rsas = np.array([
+                np.array([
+                    np.array([
+                        self._reward_sas(s, a, sp) for sp in range(self.n_states)
+                        ]) for a in range(self.n_actions)
+                ]) for s in range(self.n_states)
+            ])
+
+        print('Check all observation probabilities sum to 1...')
         # Check all O[s][a][s'][:] probs sum to 1
         for s in range(self.n_states):
             for a in range(self.n_actions):
@@ -163,6 +182,7 @@ class DiscreteMDP(gym.Env):
                     assert self.Osaso[s][a][sp].sum() == 1
 
         # Check all T[s][a][:] probs sum to 1
+        print('Checking all transition probabilities sum to 1...')
         for s in range(self.n_states):
             for a in range(self.n_actions):
                 try:
@@ -342,7 +362,7 @@ class DiscreteMDP(gym.Env):
         n_eps = len(self.observation_episode_memory[1:])
         n_steps = len(self.observation_episode_memory[1])
         metrics_by_ep = np.zeros(n_eps)
-        feat_cols = ['z', 'y0', 'y1', 'c']
+        feat_cols = ['z', 'y0', 'y1', 'c', 'yd']
         df = pd.DataFrame([],
                 columns=['episode', 'timestep', *feat_cols, 'a', 'r'])
 
@@ -624,7 +644,11 @@ class DiscreteMDP(gym.Env):
         int
             Initial state index.
         """
-        s0 = np.random.choice(np.arange(self.n_states), p=self.mu0)
+        try:
+            s0 = np.random.choice(np.arange(self.n_states), p=self.mu0)
+        except Exception as e:
+            print(f'self.mu0: {self.mu0}')
+            raise e
         return s0
 
 
@@ -773,33 +797,35 @@ def compute_optimal_policy(env, gamma):
     # Compute optimal policy (only one)
     # Below works, leaving here in case I mess it up with multiple optimal
     # policy computations.
-    # pi_opt = np.zeros(env.n_states, dtype=int)
-    # for s in range(env.n_states):
-    #     start_idx = s*env.n_actions
-    #     end_idx = s*env.n_actions+env.n_actions
-    #     pi_opt[s] = res.x[start_idx:end_idx].argmax()
-
-    # Compute all optimal policies.
-    pi_opts = [np.zeros(env.n_states, dtype=int)]
+    pi_opt = np.zeros(env.n_states, dtype=int)
     for s in range(env.n_states):
         start_idx = s*env.n_actions
         end_idx = s*env.n_actions+env.n_actions
-        state_idxs = res.x[start_idx:end_idx]
-        best_a = np.flatnonzero(state_idxs == np.max(state_idxs))
-        # Use index in enumeration since we're modifying the list itself.
-        for pi_i in range(len(pi_opts)):
-            for i, a in enumerate(best_a):
-                if i > 0:
-                    pi_copy = pi_opts[pi_i].copy()
-                    pi_copy[s] = a
-                    pi_opts.append(pi_copy)
-                else:
-                    pi_opts[pi_i][s] = a
-            # n_best_acts = len(best_a)
-            # if n_best_acts > 1:
-            #     print('s', s)
-            #     print(f'{n_best_acts} found')
-            #     print('state_idxs', state_idxs)
-            #     print('best_a', best_a)
+        pi_opt[s] = res.x[start_idx:end_idx].argmax()
 
-    return pi_opts
+    return np.array([pi_opt])
+
+    # Compute all optimal policies.
+    # pi_opts = [np.zeros(env.n_states, dtype=int)]
+    # for s in range(env.n_states):
+    #     start_idx = s*env.n_actions
+    #     end_idx = s*env.n_actions+env.n_actions
+    #     state_idxs = res.x[start_idx:end_idx]
+    #     best_a = np.flatnonzero(state_idxs == np.max(state_idxs))
+    #     # Use index in enumeration since we're modifying the list itself.
+    #     for pi_i in range(len(pi_opts)):
+    #         for i, a in enumerate(best_a):
+    #             if i > 0:
+    #                 pi_copy = pi_opts[pi_i].copy()
+    #                 pi_copy[s] = a
+    #                 pi_opts.append(pi_copy)
+    #             else:
+    #                 pi_opts[pi_i][s] = a
+    #         # n_best_acts = len(best_a)
+    #         # if n_best_acts > 1:
+    #         #     print('s', s)
+    #         #     print(f'{n_best_acts} found')
+    #         #     print('state_idxs', state_idxs)
+    #         #     print('best_a', best_a)
+
+    # return pi_opts
