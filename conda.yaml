@@ -5,27 +5,27 @@ channels:
   - glemaitre
   - akode
 dependencies:
-  - gym
+  # - gym
+  - imblearn
   - ipykernel
   - jupyter
   - jupyter_contrib_nbextensions
   - matplotlib
-  - numpy=1.15.4
+  - numpy
   - pandas
-  - pandas-profiling
+  # - pandas-profiling
   - pip
-  - python=3.6.8
-  - scikit-learn=0.20.3
+  - scikit-learn
   - seaborn
-  - setuptools==40.6.3
+  # - setuptools>=40.6.3
   - tabulate
-  - tqdm
-  - twine
+  # - tqdm
+  # - twine
   - pip:
-    - tensorflow==1.14.0
-    - setuptools==40.6.3
-    - git+https://github.com/jackblandin/gym-tiger.git  # Use when not env is stable
-    - git+https://github.com/jackblandin/gym-dummy.git  # Use when not env is stable
+    # - tensorflow==1.14.0
+    # - setuptools==40.6.3
+    # - git+https://github.com/jackblandin/gym-tiger.git  # Use when not env is stable
+    # - git+https://github.com/jackblandin/gym-dummy.git  # Use when not env is stable
     # - file:///Users/JBlandin/my/research/openai/custom_envs/gym-tiger  # use when editing locally
     # - file:///Users/JBlandin/my/research/openai/custom_envs/gym-dummy  # use when editing locally
     # PyPI - Doesn't work unless locally pip installed

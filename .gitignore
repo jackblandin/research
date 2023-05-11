@@ -2,7 +2,7 @@
 *.pyc
 experiments/**/logs/*
 experiments/**/resources/*
-*/**/data/**/*.csv
+*/**/data/**/*
 dist/
 *egg-info/
 *.DS_Store
