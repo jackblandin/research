@@ -1,8 +1,427 @@
+import itertools
 import logging
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
 from sklearn.base import BaseEstimator, ClassifierMixin
+
+class OptimizationProblem():
+
+    def __init__(self, name, c, A_eq=None, b_eq=None, b_ub=None, A_ub=None):
+        self.name = name
+        self.c = c
+        self.A_eq = A_eq
+        self.b_eq = b_eq
+        self.b_ub = b_ub
+        self.A_ub = A_ub
+
+class ObjectiveSplit():
+
+    def __init__(self, name, parent, c, b_ub=None, A_ub=None):
+        self.name = name
+        self.parent = parent
+        self.c = c
+        self.b_ub = b_ub
+        self.A_ub = A_ub
+
+class Objective():
+
+    def __init__(self):
+        pass
+
+    def fit(self, ldf):
+        raise NotImplementedError()
+
+    def to_splits(self):
+        raise NotImplementedError()
+
+
+class LinearObjective(Objective):
+
+    def __init__(self):
+        self.n_splits = 1
+        super().__init__()
+
+    def fit(self, ldf):
+        self.b_ub_row_ = None
+        self.c_ = self._construct_reward(ldf)
+        return self
+
+    def to_splits(self):
+        """
+        Returns objective as one or more splits.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        array<ObjectiveSplit>
+        """
+        split = ObjectiveSplit(
+            name=self.name,
+            parent=self,
+            c=self.c_,
+            A_ub=None,
+            b_ub=None,
+        )
+        return [split]
+
+    def _construct_reward(self):
+        raise NotImplementedError
+
+
+class AbsoluteValueObjective(Objective):
+
+    def __init__(self):
+        self.n_splits = 2
+        super().__init__()
+
+    def fit(self, ldf):
+        self.b_ub_row_ = 0  # Numb of constraints
+        self.A_ub_row__split1_ = self._compute_A_ub_row__split1(ldf)
+        self.A_ub_row__split2_ = self._compute_A_ub_row__split2(ldf)
+        self.c__split1_ = self._construct_reward__split1(ldf)
+        self.c__split2_ = self._construct_reward__split2(ldf)
+        return self
+
+    def to_splits(self):
+        """
+        Returns objective as one or more splits.
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        array<ObjectiveSplit>
+        """
+        split1 = ObjectiveSplit(
+            name=f"{self.name} Split1",
+            parent=self,
+            c=self.c__split1_,
+            b_ub=self.b_ub_row_,
+            A_ub=self.A_ub_row__split1_,
+        )
+        split2 = ObjectiveSplit(
+            name=f"{self.name} Split2",
+            parent=self,
+            c=self.c__split2_,
+            b_ub=self.b_ub_row_,
+            A_ub=self.A_ub_row__split2_,
+        )
+        return [split1, split2]
+
+    def _compute_A_ub_row__split1(self, ldf):
+        raise NotImplementedError()
+
+    def _compute_A_ub_row__split2(self, ldf):
+        raise NotImplementedError()
+
+    def _construct_reward__split1(self, ldf):
+        raise NotImplementedError()
+
+    def _construct_reward__split2(self, ldf):
+        raise NotImplementedError()
+
+
+class AccuracyObjective(LinearObjective):
+
+    def __init__(self):
+        self.name = 'Acc'
+        super().__init__()
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function when the objective is accuracy.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        ldf['r'] = (ldf['yhat'] == ldf['y']).astype(float)
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class DisparateImpactObjective(AbsoluteValueObjective):
+
+    def __init__(self):
+        self.name = 'DispImp'
+        super().__init__()
+
+    def _compute_A_ub_row__split1(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=1|z=0) >= P(yhat=1|z=1)
+            ```
+        which is Disparate Impact opt_problem 1.
+
+        Parameters
+        ----------
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = -1
+        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = 1
+        return ldf['A_ub']
+
+    def _compute_A_ub_row__split2(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=1|z=1) >= P(yhat=1|z=0)
+            ```
+        which is Disparate Impact opt_problem 2.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = 1
+        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = -1
+        return ldf['A_ub']
+
+    def _construct_reward__split1(self, ldf):
+        """
+        Constructs the reward function for Disparate Impact opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=1|z=0) >= P(yhat=1|z=1), in
+        which case the reward penalizes giving the Z=0 group the positive
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_z0, 'r'] = -2
+        ldf.loc[filt__yhat1_giv_z1, 'r'] = 2
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+    def _construct_reward__split2(self, ldf):
+        """
+        Constructs the reward function for Disparate Impact opt_problem 2.
+        opt_problem 2 is when we constrain P(yhat=1|z=1) >= P(yhat=1|z=0), in
+        which case the reward penalizes giving the Z=1 group the positive
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_z0, 'r'] = 2
+        ldf.loc[filt__yhat1_giv_z1, 'r'] = -2
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class EqualOpportunityObjective(AbsoluteValueObjective):
+
+    def __init__(self):
+        self.name = 'EqOpp'
+        super().__init__()
+
+    def _compute_A_ub_row__split1(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1)
+            ```
+        which is Equal Opportunity opt_problem 1.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhat1_giv_y1_z0, 'A_ub'] = -1
+        ldf.loc[filt__yhat1_giv_y1_z1, 'A_ub'] = 1
+        return ldf['A_ub']
+
+    def _compute_A_ub_row__split2(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=1|y=1,z=1) >= P(yhat=1|y=1,z=0)
+            ```
+        which is Equal Opportunity opt_problem 2.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhat1_giv_y1_z0, 'A_ub'] = 1
+        ldf.loc[filt__yhat1_giv_y1_z1, 'A_ub'] = -1
+        return ldf['A_ub']
+
+    def _construct_reward__split1(self, ldf):
+        """
+        Constructs the reward function for Equal Opportunity  opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1), in
+        which case the reward penalizes giving the Z=0 group the positive
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = -5
+        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = 5
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+    def _construct_reward__split2(self, ldf):
+        """
+        Constructs the reward function for Disparate Impact opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1), in
+        which case the reward penalizes giving the Z=0 group the positive
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = 5
+        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = -5
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class ObjectiveSet():
+
+    def __init__(self, objectives):
+        self.objectives = objectives
+
+    def construct_opt_problems(self, reward_weights, ldf, A_eq, b_eq):
+        self.objectives = [obj.fit(ldf) for obj in self.objectives]
+
+        abs_val_splits = []
+        linear_splits = []
+        abs_val_split_generator = []
+        counter = 0
+        for obj in self.objectives:
+            if obj.n_splits == 1:
+                linear_splits += obj.to_splits()
+            if obj.n_splits == 2:
+                abs_val_splits += obj.to_splits()
+                abs_val_split_generator.append([counter, counter+1])
+                counter += 2
+
+
+        # abs_val_splits_perms = list(itertools.product(*[[0,1], [2,3]]))
+        # >>> [(0, 2), (0, 3), (1, 2), (1, 3)]
+        abs_val_splits_perms = list(itertools.product(*abs_val_split_generator))
+        opt_problems = []
+        for split_indexes in abs_val_splits_perms:
+            _abs_val_splits = [abs_val_splits[idx] for idx in split_indexes]
+            all_splits = linear_splits + _abs_val_splits
+            name = ','.join([split.name for split in all_splits])
+            A_ub = np.array([split.A_ub for split in _abs_val_splits], dtype=float)
+            b_ub = np.array([split.b_ub for split in _abs_val_splits], dtype=float)
+            c = reward_weights[all_splits[0].parent.name] * all_splits[0].c
+            for split in all_splits[1:]:
+                c += reward_weights[split.parent.name] * split.c
+
+            opt_problem = OptimizationProblem(
+                name=name,
+                A_eq=A_eq,
+                b_eq=b_eq,
+                A_ub=A_ub,
+                b_ub=b_ub,
+                c=c,
+            )
+
+            opt_problems.append(opt_problem)
+
+        return opt_problems
 
 
 class ClassificationMDP:
@@ -39,10 +458,10 @@ class ClassificationMDP:
         "Lambda dataframe". One row for each state and action combination.
         Columns are **x_cols, z, y, yhat.
     b_ub_disp_imp_ : np.array<float>, len(n_states_)
-        The uppber bound `b` for Disparate Impact Sub1 and Sub2.
-    subproblems_ : array<dict>
+        The uppber bound `b` for Disparate Impact Split1 and Split2.
+    opt_problems_ : array<dict>
         Array of each linear optimization "sub" problem to solve. Each
-        subproblem is a dict with the following structure:
+        opt_problem is a dict with the following structure:
             'A_eq': self.A_eq_,
             'b_eq': self.b_eq_,
             'A_ub': numpy.ndarray<float>, len(num feat exp with abs val)
@@ -53,7 +472,7 @@ class ClassificationMDP:
                 split that occurs as a result of absolute value signs in the
                 feat exp.
             'c': array-like<float>, len(n_states*n_actions)
-                Reward vector for the subproblem.
+                Reward vector for the opt_problem.
     """
 
     def __init__(
@@ -69,7 +488,7 @@ class ClassificationMDP:
         self.A_eq_ = None
         self.b_eq_ = None
         self.ldf_ = None
-        self.subproblems_ = None
+        self.opt_problems_ = None
 
     def fit(self, clf_df):
         """
@@ -80,7 +499,7 @@ class ClassificationMDP:
         state_lookup_
         n_states_
         ldf_
-        subproblems_
+        opt_problems_
 
         Returns
         -------
@@ -114,96 +533,145 @@ class ClassificationMDP:
         # Generate the lambda dataframe (state-action indexed)
         self.ldf_ = self._compute_lambda_linear_equations()
 
-        # Compute the extra constraints for the two Disparate Impact subproblems
-        b_ub_row__disp_imp = 0  # Numb of constraints
-        A_ub_row__disp_imp_sub1 = self._compute_A_ub_row__disp_imp_sub1()
-        A_ub_row__disp_imp_sub2 = self._compute_A_ub_row__disp_imp_sub2()
+        accur = AccuracyObjective().fit(self.ldf_)
+        dis_imp = DisparateImpactObjective().fit(self.ldf_)
+        equ_opp = EqualOpportunityObjective().fit(self.ldf_)
 
-        # Compute the extra constraints for the two Disparate Impact subproblems
-        b_ub_row__eq_opp = 0  # Numb of constraints
-        A_ub_row__eq_opp_sub1 = self._compute_A_ub_row__eq_opp_sub1()
-        A_ub_row__eq_opp_sub2 = self._compute_A_ub_row__eq_opp_sub2()
+        reward_weights = {
+            'Acc': self.acc_reward_weight,
+            'DispImp': self.disp_imp_reward_weight,
+            'EqOpp': self.eq_opp_reward_weight,
+        }
+        objset = ObjectiveSet([accur, dis_imp, equ_opp])
+        self.opt_problems_ = objset.construct_opt_problems(
+            reward_weights=reward_weights,
+            ldf=self.ldf_,
+            A_eq=self.A_eq_,
+            b_eq=self.b_eq_,
+        )
 
-        ## Combine all constraints for each subproblem permutation
-        self.subproblems_ = [
-            {
-                'name': 'DispImp1, EqOpp1',
-                'A_eq': self.A_eq_,
-                'b_eq': self.b_eq_,
-                'A_ub': np.array([A_ub_row__disp_imp_sub1, A_ub_row__eq_opp_sub1], dtype=float),
-                'b_ub': np.array([b_ub_row__disp_imp, b_ub_row__eq_opp], dtype=float),
-                'c': (
-                    self.acc_reward_weight * self._construct_reward__accuracy()
-                    + self.disp_imp_reward_weight * self._construct_reward__disp_imp_sub1()
-                    + self.eq_opp_reward_weight * self._construct_reward__eq_opp_sub1()
-                ),
-            }, {
-                'name': 'DispImp1, EqOpp2',
-                'A_eq': self.A_eq_,
-                'b_eq': self.b_eq_,
-                'A_ub': np.array([A_ub_row__disp_imp_sub1, A_ub_row__eq_opp_sub2], dtype=float),
-                'b_ub': np.array([b_ub_row__disp_imp, b_ub_row__eq_opp], dtype=float),
-                'c': (
-                    self.acc_reward_weight * self._construct_reward__accuracy()
-                    + self.disp_imp_reward_weight * self._construct_reward__disp_imp_sub1()
-                    + self.eq_opp_reward_weight * self._construct_reward__eq_opp_sub2()
-                ),
-            }, {
-                'name': 'DispImp2, EqOpp1',
-                'A_eq': self.A_eq_,
-                'b_eq': self.b_eq_,
-                'A_ub': np.array([A_ub_row__disp_imp_sub2, A_ub_row__eq_opp_sub1], dtype=float),
-                'b_ub': np.array([b_ub_row__disp_imp, b_ub_row__eq_opp], dtype=float),
-                'c': (
-                    self.acc_reward_weight * self._construct_reward__accuracy()
-                    + self.disp_imp_reward_weight * self._construct_reward__disp_imp_sub2()
-                    + self.eq_opp_reward_weight * self._construct_reward__eq_opp_sub1()
-                ),
-            }, {
-                'name': 'DispImp2, EqOpp2',
-                'A_eq': self.A_eq_,
-                'b_eq': self.b_eq_,
-                'A_ub': np.array([A_ub_row__disp_imp_sub2, A_ub_row__eq_opp_sub2], dtype=float),
-                'b_ub': np.array([b_ub_row__disp_imp, b_ub_row__eq_opp], dtype=float),
-                'c': (
-                    self.acc_reward_weight * self._construct_reward__accuracy()
-                    + self.disp_imp_reward_weight * self._construct_reward__disp_imp_sub2()
-                    + self.eq_opp_reward_weight * self._construct_reward__eq_opp_sub2()
-                ),
-            },
-        ]
+        # ## Combine all constraints for each opt_problem permutation
+        # self.opt_problems_ = [
+        #     {
+        #         'names': [dis_imp.name+'1', equ_opp.name+'1'],
+        #         'A_eq': self.A_eq_,
+        #         'b_eq': self.b_eq_,
+        #         'A_ub': np.array([
+        #             dis_imp.A_ub_row__split1_,
+        #             equ_opp.A_ub_row__split1_,
+        #         ], dtype=float),
+        #         'b_ub': np.array([
+        #             dis_imp.b_ub_row_,
+        #             equ_opp.b_ub_row_,
+        #         ], dtype=float),
+        #         'c': (
+        #             self.acc_reward_weight * accur.c_
+        #             + self.disp_imp_reward_weight * dis_imp.c__split1_
+        #             + self.eq_opp_reward_weight * equ_opp.c__split1_
+        #         ),
+        #     }, {
+        #         'names': [dis_imp.name+'1', equ_opp.name+'2'],
+        #         'A_eq': self.A_eq_,
+        #         'b_eq': self.b_eq_,
+        #         'A_ub': np.array([
+        #             dis_imp.A_ub_row__split1_,
+        #             equ_opp.A_ub_row__split2_,
+        #         ], dtype=float),
+        #         'b_ub': np.array([
+        #             dis_imp.b_ub_row_,
+        #             equ_opp.b_ub_row_,
+        #         ], dtype=float),
+        #         'c': (
+        #             self.acc_reward_weight * accur.c_
+        #             + self.disp_imp_reward_weight * dis_imp.c__split1_
+        #             + self.eq_opp_reward_weight * equ_opp.c__split2_
+        #         ),
+        #     }, {
+        #         'names': [dis_imp.name+'2', equ_opp.name+'1'],
+        #         'A_eq': self.A_eq_,
+        #         'b_eq': self.b_eq_,
+        #         'A_ub': np.array([
+        #             dis_imp.A_ub_row__split2_,
+        #             equ_opp.A_ub_row__split1_,
+        #         ], dtype=float),
+        #         'b_ub': np.array([
+        #             dis_imp.b_ub_row_,
+        #             equ_opp.b_ub_row_,
+        #         ], dtype=float),
+        #         'c': (
+        #             self.acc_reward_weight * accur.c_
+        #             + self.disp_imp_reward_weight * dis_imp.c__split2_
+        #             + self.eq_opp_reward_weight * equ_opp.c__split1_
+        #         ),
+        #     }, {
+        #         'names': [dis_imp.name+'2', equ_opp.name+'2'],
+        #         'A_eq': self.A_eq_,
+        #         'b_eq': self.b_eq_,
+        #         'A_ub': np.array([
+        #             dis_imp.A_ub_row__split2_,
+        #             equ_opp.A_ub_row__split2_,
+        #         ], dtype=float),
+        #         'b_ub': np.array([
+        #             dis_imp.b_ub_row_,
+        #             equ_opp.b_ub_row_,
+        #         ], dtype=float),
+        #         'c': (
+        #             self.acc_reward_weight * accur.c_
+        #             + self.disp_imp_reward_weight * dis_imp.c__split2_
+        #             + self.eq_opp_reward_weight * equ_opp.c__split2_
+        #         ),
+        #     },
+        # ]
 
         return None
 
-    def compute_optimal_policies(self):
+    def compute_optimal_policies(self, skip_error_terms=False, method='highs'):
         """
         Computes the optimal policies for the classification MDP.
 
         Parameters
         ----------
+        skip_error_terms : bool, default False
+            If true, doesn't try and find all solutions and instead just invokes
+            the scipy solver on the input terms.
+        method : str, default 'highs'
+            The scipy solver method to use. Options are 'highs' (default),
+            'highs-ds', 'highs-ipm'.
 
         Returns
         -------
         opt_pols : list<np.array>
             Optimal policies.
         """
-        # Find the best policy/reward of all the subproblems
+        # Find the best policy/reward of all the opt_problems
         best_policies_best_rewards = []
-        for subprob in self.subproblems_:
+        for subprob in self.opt_problems_:
+            # opt_pols, opt_rew = _find_all_solutions_lp(
+            #     c=subprob['c'],
+            #     A_eq=subprob['A_eq'],
+            #     b_eq=subprob['b_eq'],
+            #     A_ub=subprob['A_ub'],
+            #     b_ub=subprob['b_ub'],
+            #     error_term=1e-12,
+            #     skip_error_terms=skip_error_terms,
+            #     method=method,
+            # )
             opt_pols, opt_rew = _find_all_solutions_lp(
-                c=subprob['c'],
-                A_eq=subprob['A_eq'],
-                b_eq=subprob['b_eq'],
-                A_ub=subprob['A_ub'],
-                b_ub=subprob['b_ub'],
+                c=subprob.c,
+                A_eq=subprob.A_eq,
+                b_eq=subprob.b_eq,
+                A_ub=subprob.A_ub,
+                b_ub=subprob.b_ub,
                 error_term=1e-12,
+                skip_error_terms=skip_error_terms,
+                method=method,
             )
             best_policies_best_rewards.append({
                 'policies': list(opt_pols),
                 'reward': np.round(opt_rew, decimals=6),
             })
 
-        opt_pols, opt_rew = _find_best_policies_from_multiple_subproblems(
+        opt_pols, opt_rew = _find_best_policies_from_multiple_opt_problems(
             best_policies_best_rewards,
         )
 
@@ -275,216 +743,6 @@ class ClassificationMDP:
         ldf['yhat'] = yhat
         return ldf
 
-    def _compute_A_ub_row__disp_imp_sub1(self):
-        """
-        Constructs the linear equation for the constraint that
-            ```
-            P(yhat=1|z=0) >= P(yhat=1|z=1)
-            ```
-        which is Disparate Impact Subproblem 1.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        ldf['A_ub'] : pandas.Series<float>
-        """
-        n_actions = 2
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = -1
-        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = 1
-        return ldf['A_ub']
-
-    def _compute_A_ub_row__disp_imp_sub2(self):
-        """
-        Constructs the linear equation for the constraint that
-            ```
-            P(yhat=1|z=1) >= P(yhat=1|z=0)
-            ```
-        which is Disparate Impact Subproblem 2.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        ldf['A_ub'] : pandas.Series<float>
-        """
-        n_actions = 2
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = 1
-        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = -1
-        return ldf['A_ub']
-
-    def _compute_A_ub_row__eq_opp_sub1(self):
-        """
-        Constructs the linear equation for the constraint that
-            ```
-            P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1)
-            ```
-        which is Equal Opportunity subproblem 1.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        ldf['A_ub'] : pandas.Series<float>
-        """
-        n_actions = 2
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_y1_z0, 'A_ub'] = -1
-        ldf.loc[filt__yhat1_giv_y1_z1, 'A_ub'] = 1
-        return ldf['A_ub']
-
-    def _compute_A_ub_row__eq_opp_sub2(self):
-        """
-        Constructs the linear equation for the constraint that
-            ```
-            P(yhat=1|y=1,z=1) >= P(yhat=1|y=1,z=0)
-            ```
-        which is Equal Opportunity subproblem 2.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        ldf['A_ub'] : pandas.Series<float>
-        """
-        n_actions = 2
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_y1_z0, 'A_ub'] = 1
-        ldf.loc[filt__yhat1_giv_y1_z1, 'A_ub'] = -1
-        return ldf['A_ub']
-
-    def _construct_reward__accuracy(self):
-        """
-        Constructs the reward function when the objective is accuracy.
-
-        Parameters
-        ----------
-
-        Returns
-        ------
-        c : np.array<float>, len(2*len(df))
-            The objective function for the linear program.
-        """
-        ldf = self.ldf_.copy()
-        ldf['r'] = (ldf['yhat'] == ldf['y']).astype(float)
-        c = -1 * ldf['r']  # Negative since maximizing not minimizing
-        return c
-
-    def _construct_reward__disp_imp_sub1(self):
-        """
-        Constructs the reward function for Disparate Impact Subproblem 1.
-        Subproblem 1 is when we constrain P(yhat=1|z=0) >= P(yhat=1|z=1), in
-        which case the reward penalizes giving the Z=0 group the positive
-        prediction.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        c : np.array<float>, len(2*len(df))
-            The objective function for the linear program.
-        """
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_z0, 'r'] = -2
-        ldf.loc[filt__yhat1_giv_z1, 'r'] = 2
-        c = -1 * ldf['r']  # Negative since maximizing not minimizing
-        return c
-
-    def _construct_reward__disp_imp_sub2(self):
-        """
-        Constructs the reward function for Disparate Impact Subproblem 2.
-        Subproblem 2 is when we constrain P(yhat=1|z=1) >= P(yhat=1|z=0), in
-        which case the reward penalizes giving the Z=1 group the positive
-        prediction.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        c : np.array<float>, len(2*len(df))
-            The objective function for the linear program.
-        """
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_z0, 'r'] = 2
-        ldf.loc[filt__yhat1_giv_z1, 'r'] = -2
-        c = -1 * ldf['r']  # Negative since maximizing not minimizing
-        return c
-
-    def _construct_reward__eq_opp_sub1(self):
-        """
-        Constructs the reward function for Equal Opportunity  Subproblem 1.
-        Subproblem 1 is when we constrain P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1), in
-        which case the reward penalizes giving the Z=0 group the positive
-        prediction.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        c : np.array<float>, len(2*len(df))
-            The objective function for the linear program.
-        """
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = -5
-        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = 5
-        c = -1 * ldf['r']  # Negative since maximizing not minimizing
-        return c
-
-    def _construct_reward__eq_opp_sub2(self):
-        """
-        Constructs the reward function for Disparate Impact Subproblem 1.
-        Subproblem 1 is when we constrain P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1), in
-        which case the reward penalizes giving the Z=0 group the positive
-        prediction.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        c : np.array<float>, len(2*len(df))
-            The objective function for the linear program.
-        """
-        ldf = self.ldf_.copy()
-        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = 5
-        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = -5
-        c = -1 * ldf['r']  # Negative since maximizing not minimizing
-        return c
-
-
 
 class ClassificationMDPPolicy(BaseEstimator, ClassifierMixin):
     """
@@ -532,15 +790,19 @@ class ClassificationMDPPolicy(BaseEstimator, ClassifierMixin):
         """
         pass
 
-    def predict(self, X):
+    def predict(self, X, y=None):
         """
-        Predicts `y` from `X`, then returns the optimal action for that value
+        If `y` is None, then predicts `y` from `X`, then returns the optimal action for that value
         of `(X, y)`. Sort of like a two-step POMDP.
+
+        If `y` is provided, then does not predict `y`.
 
         I.e. here is some crude pseudocode reprsenting what's actually
         happening:
             ```
-            y = predict(X)
+            if y is None:
+                y = predict(X)
+
             a = pi(X, y)
             return a
             ```
@@ -548,6 +810,8 @@ class ClassificationMDPPolicy(BaseEstimator, ClassifierMixin):
         ---------
         X : pandas.DataFrame
             Input data.
+        y : pandas.Series
+            label data.
 
         Returns
         -------
@@ -560,7 +824,11 @@ class ClassificationMDPPolicy(BaseEstimator, ClassifierMixin):
         # df['y'] = (
         #     self.clf.predict_proba(X)[:,0] >= np.random.rand(len(X))
         # ).astype(int)
-        df['y'] = self.clf.predict(X)
+        if y is None:
+            df['y'] = self.clf.predict(X)
+        else:
+            df['y'] = y
+
         actions = np.zeros(len(X))
 
         # Get rid of any unused columns otherwise the state lookup breaks.
@@ -582,7 +850,7 @@ class ClassificationMDPPolicy(BaseEstimator, ClassifierMixin):
         return actions
 
 
-def _find_best_policies_from_multiple_subproblems(best_policies_best_rewards):
+def _find_best_policies_from_multiple_opt_problems(best_policies_best_rewards):
     """
     Parameters
     ----------
@@ -591,12 +859,12 @@ def _find_best_policies_from_multiple_subproblems(best_policies_best_rewards):
         ```
         best_policies_best_rewards =
             {
-                'policies': list(opt_pols_disp_imp_sub1_adult),
-                'reward': np.round(opt_rew_disp_imp_sub1_adult, decimals=6)
+                'policies': list(opt_pols_disp_imp_split1_adult),
+                'reward': np.round(opt_rew_disp_imp_split1_adult, decimals=6)
             },
             {
-                'policies': list(opt_pols_disp_imp_sub2_adult),
-                'reward': np.round(opt_rew_disp_imp_sub2_adult, decimals=6)
+                'policies': list(opt_pols_disp_imp_split2_adult),
+                'reward': np.round(opt_rew_disp_imp_split2_adult, decimals=6)
             },
         )
         ```
@@ -604,17 +872,17 @@ def _find_best_policies_from_multiple_subproblems(best_policies_best_rewards):
     Returns
     -------
     best_of_best_pols : list<numpy.array>
-        The unique list of optimal policies from all subproblems.
+        The unique list of optimal policies from all opt_problems.
     best_of_best_reward : float
-        The best reward of all subproblems.
+        The best reward of all opt_problems.
     """
     rewards = [bpbr['reward'] for bpbr in best_policies_best_rewards]
     best_idx = np.argwhere(rewards == np.amax(rewards)).flatten().tolist()
     logging.debug(f"best_idx: {best_idx}")
     best_of_best_pols = []
-    # For each subproblem index where the reward is the best reward
+    # For each opt_problem index where the reward is the best reward
     for idx in best_idx:
-        # Get all the policies from that subproblem (all have same reward)
+        # Get all the policies from that opt_problem (all have same reward)
         pols = best_policies_best_rewards[idx]['policies']
         # For each of these policies, check add it to the list of
         # best_of_best_pols if it's not already in it.
@@ -635,7 +903,7 @@ def _find_best_policies_from_multiple_subproblems(best_policies_best_rewards):
 
 
 def _find_all_solutions_lp(
-        c, A_eq, b_eq, A_ub=None, b_ub=None, error_term=1e-12):
+        c, A_eq, b_eq, A_ub=None, b_ub=None, error_term=1e-12, skip_error_terms=False, method='highs'):
     """
     Wrapper around scipy.optimize.linprog that finds ALL optimal solutions
     by iteratively solving the LP problem after adding/subtracting an "error"
@@ -659,6 +927,12 @@ def _find_all_solutions_lp(
         upper bound on the corresponding value of ``A_ub @ x``.
     error_term : float, default 1e-12
         Allowed error from the optimal reward to still be considered optimal.
+    skip_error_terms : bool, default False
+        If true, doesn't try and find all solutions and instead just invokes
+        the scipy solver on the input terms.
+    method : str, default 'highs'
+        The scipy solver method to use. Options are 'highs' (default),
+        'highs-ds', 'highs-ipm'.
 
     Returns
     -------
@@ -672,47 +946,59 @@ def _find_all_solutions_lp(
     n_states = len(b_eq)
     n_actions = 2
 
-    for i in range(len(A_eq)):
+    if skip_error_terms:
+        res = linprog(c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+        best_reward = -1*res.fun
+        pi_opt = np.zeros(n_states, dtype=int)
+        for s in range(n_states):
+            start_idx = s*n_actions
+            end_idx = s*n_actions+n_actions
+            pi_opt[s] = res.x[start_idx:end_idx].argmax()
 
-        # Positive error
-        cpos = np.array(c)
-        cpos[i] += error_term
-        res = linprog(cpos, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
-        if ((-1*res.fun > best_reward)
-            and (not np.isclose(-1*res.fun, best_reward, atol=.001))):
-            best_reward = -1*res.fun
-            logging.debug(f"\nBest Reward:\t {best_reward}")
+        best_policies = [pi_opt]
+
+    else:
+        for i in range(len(A_eq)):
+
+            # Positive error
+            cpos = np.array(c)
+            cpos[i] += error_term
+            res = linprog(cpos, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+            if ((-1*res.fun > best_reward)
+                and (not np.isclose(-1*res.fun, best_reward, atol=.001))):
+                best_reward = -1*res.fun
+                logging.debug(f"\nBest Reward:\t {best_reward}")
+                logging.debug(f"Lambdas:\t {np.round(res.x, 2)}")
+            pi_opt = np.zeros(n_states, dtype=int)
+            for s in range(n_states):
+                start_idx = s*n_actions
+                end_idx = s*n_actions+n_actions
+                pi_opt[s] = res.x[start_idx:end_idx].argmax()
+            if not _is_pol_in_pols(pi_opt, best_policies):
+                best_policies.append(pi_opt)
+                logging.debug(f"Optimal Policy:\t, {pi_opt} \n")
+
+            # Negative error
+            cneg = np.array(c)
+            cneg[i] -= error_term
+            res = linprog(cneg, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+            if ((-1*res.fun > best_reward)
+                and (not np.isclose(-1*res.fun, best_reward, atol=.001))):
+                best_reward = -1*res.fun
+                logging.debug(f"\nBest Reward:\t {best_reward}")
             logging.debug(f"Lambdas:\t {np.round(res.x, 2)}")
-        pi_opt = np.zeros(n_states, dtype=int)
-        for s in range(n_states):
-            start_idx = s*n_actions
-            end_idx = s*n_actions+n_actions
-            pi_opt[s] = res.x[start_idx:end_idx].argmax()
-        if not _is_pol_in_pols(pi_opt, best_policies):
-            best_policies.append(pi_opt)
-            logging.debug(f"Optimal Policy:\t, {pi_opt} \n")
+            pi_opt = np.zeros(n_states, dtype=int)
+            for s in range(n_states):
+                start_idx = s*n_actions
+                end_idx = s*n_actions+n_actions
+                pi_opt[s] = res.x[start_idx:end_idx].argmax()
+            if not _is_pol_in_pols(pi_opt, best_policies):
+                best_policies.append(pi_opt)
+                logging.debug(f"Optimal Policy:\t, {pi_opt} \n")
 
-        # Negative error
-        cneg = np.array(c)
-        cneg[i] -= error_term
-        res = linprog(cneg, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
-        if ((-1*res.fun > best_reward)
-            and (not np.isclose(-1*res.fun, best_reward, atol=.001))):
-            best_reward = -1*res.fun
-            logging.debug(f"\nBest Reward:\t {best_reward}")
-        logging.debug(f"Lambdas:\t {np.round(res.x, 2)}")
-        pi_opt = np.zeros(n_states, dtype=int)
-        for s in range(n_states):
-            start_idx = s*n_actions
-            end_idx = s*n_actions+n_actions
-            pi_opt[s] = res.x[start_idx:end_idx].argmax()
-        if not _is_pol_in_pols(pi_opt, best_policies):
-            best_policies.append(pi_opt)
-            logging.debug(f"Optimal Policy:\t, {pi_opt} \n")
-
-    logging.debug('\nOptimal policies:')
-    for pi in best_policies:
-        logging.debug(f"\t{np.round(pi, 2)}")
+        logging.debug('\nOptimal policies:')
+        for pi in best_policies:
+            logging.debug(f"\t{np.round(pi, 2)}")
 
     return best_policies, best_reward
 

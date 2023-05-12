@@ -60,7 +60,6 @@ def compute_demo_feature_exp(demo):
         p_yhat_eq_1_giv_y_eq_1_z_eq_1 - p_yhat_eq_1_giv_y_eq_1_z_eq_0,
     ])
 
-
     return np.array([
         mu0,
         mu1,
@@ -70,7 +69,7 @@ def compute_demo_feature_exp(demo):
 
 def compute_optimal_policy(
     clf_df, feature_types, clf_inst, x_cols, acc_weight, disp_imp_weight,
-    # eq_opp_weight,
+    eq_opp_weight, skip_error_terms=False, method='highs',
 ):
     """
     Learns the optimal policies from the provided reward weights.
@@ -103,6 +102,14 @@ def compute_optimal_policy(
         The Accuracy reward weight.
     disp_imp_weight : float
         The Disparate Impact reward weight.
+    eq_opp_weight : float
+        The Equal Opportunity reward weight.
+    skip_error_terms : bool, default False
+        If true, doesn't try and find all solutions and instead just invokes
+        the scipy solver on the input terms.
+    method : str, default 'highs'
+        The scipy solver method to use. Options are 'highs' (default),
+        'highs-ds', 'highs-ipm'.
 
     Returns
     -------
@@ -115,10 +122,13 @@ def compute_optimal_policy(
         x_cols=x_cols,
         acc_reward_weight=acc_weight,
         disp_imp_reward_weight=disp_imp_weight,
-        eq_opp_reward_weight=disp_imp_weight,
+        eq_opp_reward_weight=eq_opp_weight,
     )
     clf_mdp.fit(clf_df)
-    optimal_policies = clf_mdp.compute_optimal_policies()
+    optimal_policies = clf_mdp.compute_optimal_policies(
+        skip_error_terms=skip_error_terms,
+        method=method,
+    )
     sampled_policy = optimal_policies[np.random.choice(len(optimal_policies))]
 
     clf = train_clf(
@@ -136,7 +146,7 @@ def compute_optimal_policy(
     return clf_pol
 
 
-def generate_demo(clf, X_test, y_test):
+def generate_demo(clf, X_test, y_test, can_observe_y=False):
     """
     Create demonstration dataframe (columns are '**X', 'yhat', 'y') from a
     fitted classifer `clf`.
@@ -146,6 +156,8 @@ def generate_demo(clf, X_test, y_test):
     clf : fitted sklearn classifier
     X_test : pandas.DataFrame
     y_test : pandas.Series
+    can_observe_y : bool, default False
+        Whether the policy can "see" y or if it needs to predict it from X.
 
     Returns
     -------
@@ -156,7 +168,10 @@ def generate_demo(clf, X_test, y_test):
             yhat : predictions
             y : ground truth targets
     """
-    yhat = clf.predict(X_test)
+    if can_observe_y:
+        yhat = clf.predict(X_test, y_test)
+    else:
+        yhat = clf.predict(X_test)
     demo = pd.DataFrame(X_test).copy()
     demo['yhat'] = yhat
     demo['y'] = y_test.copy()
