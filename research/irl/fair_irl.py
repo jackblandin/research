@@ -12,64 +12,9 @@ from sklearn.preprocessing import KBinsDiscretizer, OneHotEncoder
 from sklearn.utils.validation import check_is_fitted
 
 
-def compute_demo_feature_exp(demo):
-    """
-    Transform demonstrations into feature expectations
-
-    Parameters
-    ----------
-    demo : pandas.DataFrame
-        Demonstrations. Each demonstration represents an iteration of a
-        trained classifier and its predictions on a hold-out set. Columns are
-            **`X` columns : all input columns (i.e. `X`)
-            yhat : predictions
-            y : ground truth targets
-
-    Returns
-    -------
-    array<float>, len(2)
-        mu0 : float, range(0,1)
-            The accuracy feature expectations.
-        mu1 : float, range(0,1)
-            The fairness (disparate impact) feature expectations.
-    """
-    # Accuracy
-    mu0 = np.mean(demo['yhat'] == demo['y'])
-
-    # Disparate Impact
-    p_yhat_eq_1_giv_z_eq_0 = ((demo['yhat'] == 1) & (demo['z'] == 0)).mean()
-    p_yhat_eq_1_giv_z_eq_1 = ((demo['yhat'] == 1) & (demo['z'] == 1)).mean()
-
-    mu1 = 1 - max([
-        p_yhat_eq_1_giv_z_eq_0 - p_yhat_eq_1_giv_z_eq_1,
-        p_yhat_eq_1_giv_z_eq_1 - p_yhat_eq_1_giv_z_eq_0,
-    ])
-
-    # Equal Opportunity
-    p_yhat_eq_1_giv_y_eq_1_z_eq_0 = (
-        ((demo['yhat'] == 1) & (demo['y'] == 1) & (demo['z'] == 0)).sum()
-        / ((demo['y'] == 1) & (demo['z'] == 0)).sum()
-    )
-    p_yhat_eq_1_giv_y_eq_1_z_eq_1 = (
-        ((demo['yhat'] == 1) & (demo['y'] == 1) & (demo['z'] == 1)).sum()
-        / ((demo['y'] == 1) & (demo['z'] == 1)).sum()
-    )
-    print(p_yhat_eq_1_giv_y_eq_1_z_eq_0, p_yhat_eq_1_giv_y_eq_1_z_eq_1)
-    mu2 = 1 - max([
-        p_yhat_eq_1_giv_y_eq_1_z_eq_0 - p_yhat_eq_1_giv_y_eq_1_z_eq_1,
-        p_yhat_eq_1_giv_y_eq_1_z_eq_1 - p_yhat_eq_1_giv_y_eq_1_z_eq_0,
-    ])
-
-    return np.array([
-        mu0,
-        mu1,
-        mu2,
-    ])
-
-
 def compute_optimal_policy(
-    clf_df, feature_types, clf_inst, x_cols, acc_weight, disp_imp_weight,
-    eq_opp_weight, skip_error_terms=False, method='highs',
+    clf_df, clf, x_cols, obj_set, reward_weights, skip_error_terms=False,
+    method='highs', gamma = 1e-6,
 ):
     """
     Learns the optimal policies from the provided reward weights.
@@ -77,7 +22,7 @@ def compute_optimal_policy(
     The `clf_df` is used to "fit" the ClfMDP parameters (e.g. b_eq, A_eq, etc)
     as well as the classifier that predicts `y` from `X`.
 
-    The other classification parameters (`feature_types`, and `clf_inst` are
+    The other classification parameters (`feature_types`, and `clf` are
     used only on the classifier that predicts the `y` value from the `X`
     values.
 
@@ -87,62 +32,51 @@ def compute_optimal_policy(
         Classification dataset. Required columns:
             'z' : int. Binary protected attribute.
             'y' : int. Binary target variable.
-    feature_types : dict<str, list>
-        Specifies which type of feature each column is; used for feature
-        engineering. Keys are feature types ('boolean', 'categoric',
-        'continuous', 'meta'). Values are lists of the columns with that
-        feature type.
-    clf_inst : sklearn.base.BaseEstimator, ClassifierMixin
-        Sklearn classifier instance. E.g. `RandomForestClassifier()`. if
-        unfitted, then `train_clf()` will be invoked with the provided
-        `feature_types`. If fitted, then it is left as is.
+    clf : sklearn.pipeline.Pipeline
+        Sklearn classifier instance.
     x_cols : list<str>
         The columns that are used in the state (along with `z` and `y`).
-    acc_weight : float
-        The Accuracy reward weight.
-    disp_imp_weight : float
-        The Disparate Impact reward weight.
-    eq_opp_weight : float
-        The Equal Opportunity reward weight.
+    obj_set : ObjectiveSet
+        The objective set.
+    reward_weights : dict<str, float>
+        Keys are objective identifiers. Values are their respective reward
+        weights.
     skip_error_terms : bool, default False
         If true, doesn't try and find all solutions and instead just invokes
         the scipy solver on the input terms.
     method : str, default 'highs'
         The scipy solver method to use. Options are 'highs' (default),
         'highs-ds', 'highs-ipm'.
+    gamma : float, range, [0, 1)
+        The MDP discount factor. Should be close to zero since this is a
+        classification mdp, but cannot be zero exactly otherwise the linear
+        program won't converge.
 
     Returns
     -------
     opt_pol : list<np.array<int>>
         The optimal policy. If there are multiple, it randomly selects one.
     """
-    gamma = 1e-6
     clf_mdp = ClassificationMDP(
         gamma=gamma,
+        obj_set=obj_set,
         x_cols=x_cols,
-        acc_reward_weight=acc_weight,
-        disp_imp_reward_weight=disp_imp_weight,
-        eq_opp_reward_weight=eq_opp_weight,
     )
-    clf_mdp.fit(clf_df)
+    clf_mdp.fit(
+        reward_weights=reward_weights,
+        clf_df=clf_df,
+    )
     optimal_policies = clf_mdp.compute_optimal_policies(
         skip_error_terms=skip_error_terms,
         method=method,
     )
     sampled_policy = optimal_policies[np.random.choice(len(optimal_policies))]
 
-    clf = train_clf(
-        feature_types,
-        clf_inst,
-        clf_df.iloc[:, :-1],
-        clf_df.iloc[:, -1],
-    )
     clf_pol = ClassificationMDPPolicy(
         mdp=clf_mdp,
         pi=sampled_policy,
         clf=clf,
     )
-
     return clf_pol
 
 
@@ -168,24 +102,29 @@ def generate_demo(clf, X_test, y_test, can_observe_y=False):
             yhat : predictions
             y : ground truth targets
     """
-    if can_observe_y:
-        yhat = clf.predict(X_test, y_test)
-    else:
-        yhat = clf.predict(X_test)
     demo = pd.DataFrame(X_test).copy()
-    demo['yhat'] = yhat
+
+    if can_observe_y:
+        # yhat = clf.predict(X_test, y_test)
+        demo['yhat'] = demo['y'].copy()
+    else:
+        demo['yhat'] = clf.predict(X_test)
+
     demo['y'] = y_test.copy()
+
     return demo
 
 
-def generate_expert_demonstrations(
-        X_demo, y_demo, feature_types, clf_inst, n_feat_exp, m=3,
+def generate_demos_k_folds(
+        X_demo, y_demo, clf, obj_set, n_demos=3,
 ):
     """
     Generates the expert demonstrations which will be used as the positive
-    training samples in the IRL loop. Each demonstration is a vector of
-    feature expectations. Each demonstration fits a classifier on a fold of
-    the provided dataset and then predicting on the holdout part of the fold.
+    training samples in the IRL loop, or generates the initial policy
+    demonstrations that serve as the initial positive examples in the IRL loop.
+    Each demonstration is a vector of feature expectations. Each demonstration
+    fits a classifier on a fold of the provided dataset and then predicting on
+    the holdout part of the fold.
 
     Parameters
     ----------
@@ -193,129 +132,65 @@ def generate_expert_demonstrations(
         The X training data reserved for generating the demonstrations.
     y_demo : array-like
         The y training data reserved for generating the demonstrations.
-    feature_types : dict<str, list>
-        Specifies which type of feature each column is; used for feature
-        engineering. Keys are feature types ('boolean', 'categoric',
-        'continuous', 'meta'). Values are lists of the columns with that
-        feature type.
-    clf_inst : sklearn.base.BaseEstimator, ClassifierMixin
-        Sklearn classifier instance. E.g. `RandomForestClassifier()`. if
-        unfitted, then `train_clf()` will be invoked with the provided
-        `feature_types`. If fitted, then it is left as is.
-    n_feature_exp : float
-        The number of feature expectations.
-    m : int, default 3
-        The number of demonstrations to generate.
+    clf : sklearn.pipeline.Pipeline, ClassifierMixin
+        Sklearn classifier pipeline.
+    obj_set : ObjectiveSet
+        The objective set.
+    n_demos : int, default 3
+        The number of demonstrations to generate (also the k in k folds).
 
     Returns
     -------
-    muE : numpy.ndarray, shape(m, n_feature_exp)
-        The expert demonstrations. Each demonstration is a vector of feature
-        expectations.
+    mu : numpy.ndarray, shape(m, len(obj_set.objectives))
+        The demonstrations feature expectations.
     demos : list<pandas.DataFrame>
         A list of all the demonstration dataframes.
     """
-    muE = np.zeros((m, n_feat_exp))  # expert demo feature expectations
+    mu = np.zeros((n_demos, len(obj_set.objectives)))  # demo feat exp
     demos = []
 
-    # Generate demonstrations (populate muE)
-    def _generate_demo(muE, demos, k, X_train, X_test, y_train, y_test):
-        logging.info(f"\tStaring iteration {k+1}/{m}")
+    # Generate demonstrations (populate mu)
+    def _generate_demo(mu, demos, k, X_train, X_test, y_train, y_test):
+        logging.debug(f"\tStaring iteration {k+1}/{n_demos}")
 
         # Fit the classifier
-        clf = train_clf(feature_types, clf_inst, X_train, y_train)
+        clf.fit(X_train, y_train)
 
-        logging.info('\t\tGenerating demo...')
+        logging.debug('\t\tGenerating demo...')
         demo = generate_demo(clf, X_test, y_test)
-        logging.info(
+        logging.debug(
             df_to_log(
                 demo.groupby(['z', 'y'])[['yhat']].agg(['count', 'mean'])
             )
         )
 
-        logging.info('\t\tComputing feature expectations...')
-        muE[k] = compute_demo_feature_exp(demo)
+        logging.debug('\t\tComputing feature expectations...')
+        mu[k] = obj_set.compute_demo_feature_exp(demo)
         demos.append(demo)
-        logging.info(f"\t\tmuE[{k}]: {muE[k]}")
+        logging.debug(f"\t\tmu[{k}]: {mu[k]}")
 
-        return muE, demos
+        return mu, demos
 
-    logging.info('')
-    logging.info('Generating expert demonstrations...')
+    logging.debug('')
+    logging.debug('Generating expert demonstrations...')
 
-    if m > 1:
-        k_fold = KFold(m)
+    if n_demos > 1:
+        k_fold = KFold(n_demos)
         for k, (train, test) in enumerate(k_fold.split(X_demo, y_demo)):
             X_train, y_train = X_demo.iloc[train], y_demo.iloc[train]
             X_test, y_test = X_demo.iloc[test], y_demo.iloc[test]
-            muE, demos = _generate_demo(
-                muE, demos, k, X_train, X_test, y_train, y_test,
+            mu, demos = _generate_demo(
+                mu, demos, k, X_train, X_test, y_train, y_test,
             )
     else:
         X_train, X_test, y_train, y_test = train_test_split(
             X_demo, y_demo, test_size=.33,
         )
-        muE, demos = _generate_demo(
-            muE, demos, 0, X_train, X_test, y_train, y_test,
+        mu, demos = _generate_demo(
+            mu, demos, 0, X_train, X_test, y_train, y_test,
         )
 
-    return muE, demos
-
-def generate_initial_policies(
-        X_demo, y_demo, feature_types, clf_inst, n_policies=1,
-):
-    """
-    Generate initial policy(s) used as a starting point for the IRL loop SVM
-    negative samples. These are the negative samples whereas
-    `generate_expert_demonstrations()` produce the positive samples.
-
-    Parameters
-    ----------
-    X_demo : pandas.DataFrame
-        X data for fitting the initial policy.
-    y_demo : pandas.Series
-        y data for fitting the initial policy.
-    feature_types : dict<str, list>
-        Specifies which type of feature each column is; used for feature
-        engineering. Keys are feature types ('boolean', 'categoric',
-        'continuous', 'meta'). Values are lists of the columns with that
-        feature type.
-    clf_inst : sklearn.base.BaseEstimator, ClassifierMixin
-        Sklearn classifier instance. E.g. `RandomForestClassifier()`. if
-        unfitted, then `train_clf()` will be invoked with the provided
-        `feature_types`. If fitted, then it is left as is.
-    n_policies : int, default 1
-        The number of policies to generate. Needs to be at least one.
-
-    Returns
-    -------
-    mu : list<array<float>, len(2)> A list of:
-        mu0 : float, range(0,1)
-            The accuracy feature expectations.
-        mu1 : float, range(0,1)
-            The fairness (disparate impact) feature expectations.
-    """
-    mu = []
-
-    logging.info('')
-    for i in range(n_policies):
-        logging.info(f"Generating initial policy {i+1}/{n_policies}")
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_demo, y_demo, test_size=.33)
-
-        logging.info('\tFitting classifier...')
-        clf = train_clf(feature_types, clf_inst, X_train, y_train)
-
-        logging.info('\tGenerating demo...')
-        demo = generate_demo(clf, X_test, y_test)
-
-        logging.info('\tComputing feature expectations...')
-        feature_exp = compute_demo_feature_exp(demo)
-
-        mu.append(feature_exp)
-        logging.info(f"\tmu: {mu}")
-
-    return mu
+    return mu, demos
 
 
 def irl_error(w, muE, muj):
@@ -329,9 +204,12 @@ def irl_error(w, muE, muj):
     return err, mu_delta, l2_mu_delta
 
 
-def train_clf(feature_types, clf_inst, X_train, y_train):
+def sklearn_clf_pipeline(feature_types, clf_inst):
     """
-    Trains a classifier, which corresponds to a demonstration (X, yhat, y).
+    Utility method for constructing sklearn classifier pipeline, which in this
+    case corresponds to a demonstration (X, yhat, y). The input clf_inst
+    doesn't need to be a sklearn classifier, but does need to adhere to the
+    sklearn.base.BaseEstimator/ClassifierMixin paradigm.
 
     Parameters
     ----------
@@ -341,29 +219,13 @@ def train_clf(feature_types, clf_inst, X_train, y_train):
         'continuous', 'meta'). Values are lists of the columns with that
         feature type.
     clf_inst : sklearn.base.BaseEstimator, ClassifierMixin
-        Sklearn classifier instance. E.g. `RandomForestClassifier()`. if
-        unfitted, then `train_clf()` will be invoked with the provided
-        `feature_types`. If fitted, then it is left as is.
-    X_train : pandas.DataFrame
-    y_train : pandas.Series
+        Sklearn classifier instance. E.g. `RandomForestClassifier()`.
 
     Returns
     -------
-    clf : sklearn classifier
-        Fitted classifier.
+    pipe : sklearn.pipeilne.Pipeline
+        scikit-learn pipeline.
     """
-    # Check if classifier is already fitted
-    logging.info('\t\tChecking if classifier already fitted...')
-    fitted = [
-        v for v in vars(clf_inst) if (
-            v.endswith("_") and not v.startswith("__")
-        )
-    ]
-    if fitted:
-        logging.info('\t\tClassifier already fitted. Skipping fit.')
-        return clf_inst
-
-    logging.info('\t\tFitting classifier...')
     numeric_trf = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
@@ -392,11 +254,126 @@ def train_clf(feature_types, clf_inst, X_train, y_train):
         transformers=transformers,
         sparse_threshold=.000001,
     )
-    clf = Pipeline(
+    pipe = Pipeline(
         steps=[
             ("preprocessor", preprocessor),
             ("classifier", clf_inst),
         ],
     )
-    clf.fit(X_train, y_train)
-    return clf
+    return pipe
+
+
+def generate_all_exp_results_df(obj_set, n_trials, data_demo, exp_algo, irl_method):
+    """
+    Generate dataframe for experiment parameters and results
+
+    Parameters
+    ----------
+    obj_set : ObjectiveSet
+        The objective set.
+    n_trials : int
+        Number of experiment trials to run.
+    data_demo : str
+        The name of the dataset used to generate expert demonstrations.
+    exp_algo : str
+        The name of the algorithm used to train the expert demonstrator.
+    irl_method : str
+        The name of the IRL algorithm used to recover the rewards.
+
+    Returns
+    -------
+    all_exp_df : pandas.DataFrame
+        A dataframe with relevant columns, but no data.
+    """
+    all_exp_df_cols=['n_trials', 'data_demo', 'exp_algo', 'irl_method']
+
+    for obj in obj_set.objectives:
+        all_exp_df_cols.append(f"muE_{obj.name}_mean")
+        all_exp_df_cols.append(f"muE_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        all_exp_df_cols.append(f"wL_{obj.name}_mean")
+        all_exp_df_cols.append(f"wL_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        all_exp_df_cols.append(f"muL_err_{obj.name}_mean")
+        all_exp_df_cols.append(f"muL_err_{obj.name}_std")
+
+    all_exp_df_cols.append('muL_err_l2norm_mean')
+    all_exp_df_cols.append('muL_err_l2norm_std')
+
+    all_exp_df = pd.DataFrame(columns=all_exp_df_cols)
+
+    all_exp_df.loc[0, 'n_trials'] = n_trials
+    all_exp_df.loc[0, 'data_demo'] = 'Adult'
+    all_exp_df.loc[0, 'exp_algo'] = exp_algo
+    all_exp_df.loc[0, 'irl_method'] = 'IRL_METHOD'
+
+    return all_exp_df
+
+
+def generate_single_exp_results_df(obj_set, results):
+    """
+    Generate dataframe for a single experiment. Keeps track of the results of
+    the best learned policy.
+
+    Parameters
+    ----------
+    obj_set : ObjectiveSet
+        The objective set.
+    data : list<list>
+        The results.
+
+    exp_df : pandas.DataFrame
+        A dataframe with relevant weight, feat exp, and error columns for the
+        best learned policy.
+    """
+    exp_df_cols = []
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muE_{obj.name}_mean")
+        exp_df_cols.append(f"muE_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"wL_{obj.name}")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muL_{obj.name}")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muL_err_{obj.name}")
+
+    exp_df_cols.append('muL_err_l2norm')
+
+    exp_df = pd.DataFrame(results, columns=exp_df_cols)
+
+    return exp_df
+
+def new_trial_result(obj_set, muE, df_irl):
+    result = []
+
+    for i, obj in enumerate(obj_set.objectives):
+        muE_mean = np.mean(muE[:, i])
+        muE_std = np.std(muE[:, i])
+        result += [muE_mean, muE_std]
+
+    best_idx = (
+        df_irl.query('(is_expert == 0) and (is_init_policy == 0)')
+        .sort_values('t')
+        .index[0]
+    )
+    best_row = df_irl.loc[best_idx]
+
+    for i, obj in enumerate(obj_set.objectives):
+        result.append(best_row[f"{obj.name}_weight"])
+
+    for obj in obj_set.objectives:
+        result.append(best_row[f"{obj.name}"])
+
+    for i, obj in enumerate(obj_set.objectives):
+        _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE[:, i]))
+        result.append(_muL_err)
+
+    result.append(best_row['mu_delta_l2norm'])
+
+    return result

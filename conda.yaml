@@ -5,8 +5,9 @@ channels:
   - glemaitre
   - akode
 dependencies:
+  - fairlearn
   # - gym
-  - imblearn
+  - imbalanced-learn
   - ipykernel
   - jupyter
   - jupyter_contrib_nbextensions

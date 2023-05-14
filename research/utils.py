@@ -78,6 +78,27 @@ class ManualClassifier():
         actions = X.apply(self.pred_lambda, axis=1)
         return actions
 
+def is_clf_fitted(clf_inst):
+    """
+    Checks if a sklearn-like classifier is already fitted.
+
+    Parameters
+    ----------
+    clf_inst : <sklearn.base.ClassifierMixin>
+        Classifier to check wheither it's fitted.
+
+    Returns
+    -------
+    is_fitted : bool
+        True if clf_inst fitted. False if not fitted..
+    """
+    is_fitted = [
+        v for v in vars(clf_inst) if (
+            v.endswith("_") and not v.startswith("__")
+        )
+    ]
+    return is_fitted
+
 def df_to_log(df, title='', tab_level=1):
     tab_prefix = tab_level * '\t'
     str_out = (
