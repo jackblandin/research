@@ -1,10 +1,29 @@
 import logging
 import pandas as pd
+from imblearn.under_sampling import RandomUnderSampler
+from fairlearn.datasets import fetch_adult
+from fairlearn.postprocessing import ThresholdOptimizer
 from research.utils import *
 
 
+def generate_dataset(dataset, n_samples):
+
+    if dataset == 'Adult':
+        X, y, feature_types = generate_adult_dataset(n=25_000)
+    elif dataset == 'COMPAS':
+        X, y, feature_types = generate_compas_dataset(n=25_000)
+
+    X = X[
+        feature_types['boolean']
+        + feature_types['categoric']
+        + feature_types['continuous']
+    ]
+
+    return X, y, feature_types
+
+
 def generate_adult_dataset(
-        filepath, n=10_000, z_col='is_race_white', y_col='is_income_over_50k',
+    n=10_000, z_col='is_race_white', y_col='is_income_over_50k',
 ):
     """
     Wrapper function for generating a sample of the adult dataset. This
@@ -13,8 +32,6 @@ def generate_adult_dataset(
 
     Parameters
     ---------
-    filepath : str
-        Filepath for dataset.
     n : int, default 10_000
         Number of records to sample from dataset.
     z_col : str, default 'is_race_white'
@@ -31,9 +48,9 @@ def generate_adult_dataset(
     y : pandas.Series
         Just the y column.
     """
-
-    # Import dataset
-    df = pd.read_csv(filepath)
+    data = fetch_adult(as_frame=True)
+    df = data.data.copy()
+    df['income'] = data.target.copy()
 
     # Take sample if possible
     if n < len(df):
@@ -49,9 +66,9 @@ def generate_adult_dataset(
     # Specify the protected attribute `z`
     df['z'] = df[z_col].astype(int)
 
-    # Display useful summary info on z and y
-    logging.info('Dataset count of each z, y group')
-    logging.info(
+    # Display useful summary debug on z and y
+    logging.debug('Dataset count of each z, y group')
+    logging.debug(
         df_to_log(
             df.groupby(['z'])[['y']].agg(['count', 'mean'])
       )
@@ -59,14 +76,43 @@ def generate_adult_dataset(
 
     # Split into inputs and target variables
     y = df['y']
-    X = df.copy().drop(columns='y')
+    X = df.copy().drop(columns=['y', y_col, z_col, 'income'])
 
-    return df, X, y
+    # Balance the positive and negative classes
+    rus = RandomUnderSampler(sampling_strategy=.5)
+    X, y = rus.fit_resample(X, y)
+    feature_types = {
+        'boolean': [
+            'z',
+        ],
+        'categoric': [
+            'workclass',
+            'education',
+            # 'marital-status',
+            # 'occupation',
+            # 'relationship',
+            # 'native-country',
+            # 'race',
+              'sex',
+        ],
+        'continuous': [
+            # 'age',
+            # 'educational-num',
+            # 'capital-gain',
+            # 'capital-loss',
+            # 'hours-per-week',
+        ],
+        'meta': [
+            'fnlwgt'
+        ],
+    }
 
+    return X, y, feature_types
 
 
 def generate_compas_dataset(
-        filepath, n=10_000, z_col='is_race_white', y_col='is_recid',
+    n=10_000, z_col='is_race_white', y_col='is_recid',
+    filepath='./../../data/compas/cox-violent-parsed.csv',
 ):
     """
     Wrapper function for generating a sample of the Compas dataset. This
@@ -116,9 +162,9 @@ def generate_compas_dataset(
     # Specify the protected attribute `z`
     df['z'] = df[z_col].astype(int)
 
-    # Display useful summary info on z and y
-    logging.info('Dataset count of each z, y group')
-    logging.info(
+    # Display useful summary debug on z and y
+    logging.debug('Dataset count of each z, y group')
+    logging.debug(
         df_to_log(
             df.groupby(['z'])[['y']].agg(['count', 'mean'])
       )
@@ -128,4 +174,51 @@ def generate_compas_dataset(
     y = df['y']
     X = df.copy().drop(columns='y')
 
-    return df, X, y
+    # Balance the positive and negative classes
+    # rus = RandomUnderSampler(sampling_strategy=.5)
+    # X, y = rus.fit_resample(X, y)
+
+    feature_types = {
+        'boolean': [
+            'z',
+        ],
+        'categoric': [
+            'gender',
+            'age_cat',
+            'score_text',
+            'v_score_text',
+        ],
+        'continuous': [
+            # 'age',
+            # 'decile_score',
+            # 'juv_fel_count',
+            # 'priors_count',
+            # 'v_decile_score',
+        ],
+        'meta': [
+        ],
+    }
+
+    return X, y, feature_types
+
+
+class ReductionWrapper():
+    def __init__(self, clf, sensitive_features):
+        self.clf = clf
+        self.sensitive_features = sensitive_features
+
+    def fit(self, X, y, sample_weight=None, **kwargs):
+        self.clf.fit(
+            X,
+            y,
+            sensitive_features=X[self.sensitive_features],
+            **kwargs,
+        )
+        return self
+
+    def predict(self, X, sample_weight=None, **kwargs):
+        return self.clf.predict(
+            X,
+            sensitive_features=X[self.sensitive_features],
+            **kwargs,
+        )

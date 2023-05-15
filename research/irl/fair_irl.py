@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+import os
 import pandas as pd
 from research.rl.env.clf_mdp import *
 from research.utils import *
@@ -62,14 +63,20 @@ def compute_optimal_policy(
         obj_set=obj_set,
         x_cols=x_cols,
     )
+    # Construct the mdp, including optimization problems
     clf_mdp.fit(
         reward_weights=reward_weights,
         clf_df=clf_df,
     )
+    # Compute the optimal policy(s). This does NOT fit the classifier that
+    # predicts Y from Z, X. That occurs on the generate_demo() call. This
+    # `compute_optimal_policies` computes the optimal policy, assuming the
+    # state is known.
     optimal_policies = clf_mdp.compute_optimal_policies(
         skip_error_terms=skip_error_terms,
         method=method,
     )
+    # Pick from one of the policies (if there are multiple).
     sampled_policy = optimal_policies[np.random.choice(len(optimal_policies))]
 
     clf_pol = ClassificationMDPPolicy(
@@ -115,9 +122,7 @@ def generate_demo(clf, X_test, y_test, can_observe_y=False):
     return demo
 
 
-def generate_demos_k_folds(
-        X_demo, y_demo, clf, obj_set, n_demos=3,
-):
+def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
     """
     Generates the expert demonstrations which will be used as the positive
     training samples in the IRL loop, or generates the initial policy
@@ -128,9 +133,9 @@ def generate_demos_k_folds(
 
     Parameters
     ----------
-    X_demo : numpy.ndarray
+    X : numpy.ndarray
         The X training data reserved for generating the demonstrations.
-    y_demo : array-like
+    y : array-like
         The y training data reserved for generating the demonstrations.
     clf : sklearn.pipeline.Pipeline, ClassifierMixin
         Sklearn classifier pipeline.
@@ -176,18 +181,18 @@ def generate_demos_k_folds(
 
     if n_demos > 1:
         k_fold = KFold(n_demos)
-        for k, (train, test) in enumerate(k_fold.split(X_demo, y_demo)):
-            X_train, y_train = X_demo.iloc[train], y_demo.iloc[train]
-            X_test, y_test = X_demo.iloc[test], y_demo.iloc[test]
+        for k, (train, test) in enumerate(k_fold.split(X, y)):
+            _X_train, _y_train = X.iloc[train], y.iloc[train]
+            _X_test, _y_test = X.iloc[test], y.iloc[test]
             mu, demos = _generate_demo(
-                mu, demos, k, X_train, X_test, y_train, y_test,
+                mu, demos, k, _X_train, _X_test, _y_train, _y_test,
             )
     else:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_demo, y_demo, test_size=.33,
+        _X_train, _X_test, _y_train, _y_test = train_test_split(
+            X, y, test_size=.33,
         )
         mu, demos = _generate_demo(
-            mu, demos, 0, X_train, X_test, y_train, y_test,
+            mu, demos, 0, _X_train, _X_test, _y_train, _y_test,
         )
 
     return mu, demos
@@ -201,6 +206,8 @@ def irl_error(w, muE, muj):
     l2_mu_delta = np.linalg.norm(mu_delta)
     l2_w = np.linalg.norm(w)
     err = l2_w * l2_mu_delta
+    # 05/14/2023 – Added this to see if it fixes issue where lower weights are preferred
+    # err = err / l2_w
     return err, mu_delta, l2_mu_delta
 
 
@@ -335,27 +342,39 @@ def generate_single_exp_results_df(obj_set, results):
         exp_df_cols.append(f"muE_{obj.name}_std")
 
     for obj in obj_set.objectives:
+        exp_df_cols.append(f"muE_hold_{obj.name}_mean")
+        exp_df_cols.append(f"muE_hold_{obj.name}_std")
+
+    for obj in obj_set.objectives:
         exp_df_cols.append(f"wL_{obj.name}")
 
     for obj in obj_set.objectives:
         exp_df_cols.append(f"muL_{obj.name}")
+        exp_df_cols.append(f"muL_hold_{obj.name}")
 
     for obj in obj_set.objectives:
         exp_df_cols.append(f"muL_err_{obj.name}")
+        exp_df_cols.append(f"muL_hold_err_{obj.name}")
 
     exp_df_cols.append('muL_err_l2norm')
+    exp_df_cols.append('muL_hold_err_l2norm')
 
     exp_df = pd.DataFrame(results, columns=exp_df_cols)
 
     return exp_df
 
-def new_trial_result(obj_set, muE, df_irl):
+def new_trial_result(obj_set, muE, muE_hold, df_irl):
     result = []
 
     for i, obj in enumerate(obj_set.objectives):
         muE_mean = np.mean(muE[:, i])
         muE_std = np.std(muE[:, i])
         result += [muE_mean, muE_std]
+
+    for i, obj in enumerate(obj_set.objectives):
+        muE_hold_mean = np.mean(muE_hold[:, i])
+        muE_hold_std = np.std(muE_hold[:, i])
+        result += [muE_hold_mean, muE_hold_std]
 
     best_idx = (
         df_irl.query('(is_expert == 0) and (is_init_policy == 0)')
@@ -369,11 +388,17 @@ def new_trial_result(obj_set, muE, df_irl):
 
     for obj in obj_set.objectives:
         result.append(best_row[f"{obj.name}"])
+        result.append(best_row[f"muL_hold_{obj.name}"])
 
     for i, obj in enumerate(obj_set.objectives):
-        _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE[:, i]))
+        _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE_hold[:, i]))
+        _muL_hold_err = abs(best_row[f"muL_hold_{obj.name}"] - np.mean(muE_hold[:, i]))
         result.append(_muL_err)
+        result.append(_muL_hold_err)
 
     result.append(best_row['mu_delta_l2norm'])
+    result.append(best_row['mu_delta_l2norm_hold'])
 
     return result
+
+

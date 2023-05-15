@@ -20,6 +20,7 @@ dependencies:
   - seaborn
   # - setuptools>=40.6.3
   - tabulate
+  - tempeh
   # - tqdm
   # - twine
   - pip:
