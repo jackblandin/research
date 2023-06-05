@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 from imblearn.under_sampling import RandomUnderSampler
-from fairlearn.datasets import fetch_adult
+from fairlearn.datasets import fetch_adult, fetch_boston
 from fairlearn.postprocessing import ThresholdOptimizer
 from research.utils import *
 
@@ -9,9 +9,11 @@ from research.utils import *
 def generate_dataset(dataset, n_samples):
 
     if dataset == 'Adult':
-        X, y, feature_types = generate_adult_dataset(n=25_000)
+        X, y, feature_types = generate_adult_dataset(n_samples)
     elif dataset == 'COMPAS':
-        X, y, feature_types = generate_compas_dataset(n=25_000)
+        X, y, feature_types = generate_compas_dataset(n_samples)
+    elif dataset == 'Boston':
+        X, y, feature_types = generate_boston_housing_dataset(n_samples)
 
     X = X[
         feature_types['boolean']
@@ -78,9 +80,13 @@ def generate_adult_dataset(
     y = df['y']
     X = df.copy().drop(columns=['y', y_col, z_col, 'income'])
 
+    # NOTE: 05/20/2023
+    # Resampling messes up the feature expectations. Don't do this if you're
+    # doing IRL.
+    #
     # Balance the positive and negative classes
-    rus = RandomUnderSampler(sampling_strategy=.5)
-    X, y = rus.fit_resample(X, y)
+    # rus = RandomUnderSampler(sampling_strategy=.5)
+    # X, y = rus.fit_resample(X, y)
     feature_types = {
         'boolean': [
             'z',
@@ -196,6 +202,84 @@ def generate_compas_dataset(
             # 'v_decile_score',
         ],
         'meta': [
+        ],
+    }
+
+    return X, y, feature_types
+
+
+def generate_boston_housing_dataset(n=10_000):
+    """
+    Wrapper function for generating a sample of the boston housing dataset.
+
+    Parameters
+    ---------
+    n : int, default 10_000
+        Number of records to sample from dataset.
+
+    Returns
+    -------
+    df : pandas.DataFrame
+        The X and y all as one dataframe.
+    X : pandas.DataFrame
+        The X (including z) columns.
+    y : pandas.Series
+        Just the y column.
+    """
+    data = fetch_boston(as_frame=True)
+    df = data.data.copy()
+    df['LSTAT_binary'] = df['LSTAT'] >= df['LSTAT'].median()
+    df['MEDV'] = data.target.copy()
+
+    # Take sample if possible
+    if n < len(df):
+        df = df.sample(n)
+    if n > len(df):
+        df = df.sample(n, replace=True)
+
+    # Specify the protected attribute `z`
+    # Median value for Z
+    df['z'] = (df['B'] >= 381.44).astype(int)
+
+    quantile_features = []
+    for cont_feat in ['B', 'CRIM', 'ZN', 'RM', 'LSTAT']:
+        for q in [
+                # .05,
+                # .1,
+                .25,
+        ]:
+            f = f"{cont_feat}__{q}"
+            df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
+            quantile_features.append(f)
+
+    y = (df['MEDV'] >= df['MEDV'].median()).astype(int).copy()
+    X = df.drop(columns='MEDV')
+
+    feature_types = {
+        'boolean': [
+            'z',
+        ] + quantile_features,
+        'categoric': [
+        ],
+        'continuous': [
+            # 'CRIM',  # per capita crime rate by town
+            # 'ZN',  # proportion of residential land zoned for lots over 25,000 sq.ft.
+            # 'INDUS',  # proportion of non-retail business acres per town
+            # 'CHAS',  # Charles River dummy variable (= 1 if tract bounds river; 0 otherwise)
+            # 'NOX',  # nitric oxides concentration (parts per 10 million)
+            # 'RM',  # average number of rooms per dwelling
+            # 'AGE',  # proportion of owner-occupied units built prior to 1940
+            # 'DIS',  # weighted distances to five Boston employment centers
+            # 'RAD',  # index of accessibility to radial highways
+            # 'TAX',  # full-value property-tax rate per $10,000
+            # 'PTRATIO',  # pupil-teacher ratio by town
+            # 'B', # 1000(Bk - 0.63)^2 where Bk is the proportion of Black people by town
+            # 'LSTAT',  # % lower status of the population
+        ],
+        'meta': [
+        ],
+        'target': [
+            'MEDV',  # Median value of owner-occupied homes in $1000's],
         ],
     }
 

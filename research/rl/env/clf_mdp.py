@@ -174,10 +174,10 @@ class AccuracyObjective(LinearObjective):
         return c
 
 
-class DisparateImpactObjective(AbsoluteValueObjective):
+class DemographicParityObjective(AbsoluteValueObjective):
 
     def __init__(self):
-        self.name = 'DispImp'
+        self.name = 'DemPar'
         super().__init__()
 
     def compute_feat_exp(self, demo):
@@ -194,12 +194,22 @@ class DisparateImpactObjective(AbsoluteValueObjective):
                 yhat : predictions
                 y : ground truth targets
         """
-        p_yhat_eq_1_giv_z_eq_0 = ((demo['yhat'] == 1) & (demo['z'] == 0)).mean()
-        p_yhat_eq_1_giv_z_eq_1 = ((demo['yhat'] == 1) & (demo['z'] == 1)).mean()
+        p_yhat_eq_1_giv_z_eq_0 = (
+            ((demo['yhat'] == 1) & (demo['z'] == 0)).sum()
+            / (demo['z'] == 0).sum()
+        )
+        p_yhat_eq_1_giv_z_eq_1 = (
+            ((demo['yhat'] == 1) & (demo['z'] == 1)).sum()
+            / (demo['z'] == 1).sum()
+        )
         mu = 1 - max([
             p_yhat_eq_1_giv_z_eq_0 - p_yhat_eq_1_giv_z_eq_1,
             p_yhat_eq_1_giv_z_eq_1 - p_yhat_eq_1_giv_z_eq_0,
         ])
+
+        if np.isnan(mu):
+            mu = 1
+
         return mu
 
     def _compute_A_ub_row__split1(self, ldf):
@@ -208,7 +218,7 @@ class DisparateImpactObjective(AbsoluteValueObjective):
             ```
             P(yhat=1|z=0) >= P(yhat=1|z=1)
             ```
-        which is Disparate Impact opt_problem 1.
+        which is Demographic Parity opt_problem 1.
 
         Parameters
         ----------
@@ -222,9 +232,11 @@ class DisparateImpactObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
+        p_z0 = (ldf['z'] == 0).mean()
+        p_z1 = (ldf['z'] == 1).mean()
         ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = -1
-        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = 1
+        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = -1 / p_z0
+        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = 1 / p_z1
         return ldf['A_ub']
 
     def _compute_A_ub_row__split2(self, ldf):
@@ -233,7 +245,7 @@ class DisparateImpactObjective(AbsoluteValueObjective):
             ```
             P(yhat=1|z=1) >= P(yhat=1|z=0)
             ```
-        which is Disparate Impact opt_problem 2.
+        which is Demographic Parity opt_problem 2.
 
         Parameters
         ----------
@@ -249,14 +261,16 @@ class DisparateImpactObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
+        p_z0 = (ldf['z'] == 0).mean()
+        p_z1 = (ldf['z'] == 1).mean()
         ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = 1
-        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = -1
+        ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = 1 / p_z0
+        ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = -1 / p_z1
         return ldf['A_ub']
 
     def _construct_reward__split1(self, ldf):
         """
-        Constructs the reward function for Disparate Impact opt_problem 1.
+        Constructs the reward function for Demographic Parity opt_problem 1.
         opt_problem 1 is when we constrain P(yhat=1|z=0) >= P(yhat=1|z=1), in
         which case the reward penalizes giving the Z=0 group the positive
         prediction.
@@ -274,17 +288,17 @@ class DisparateImpactObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        P_z0 = (ldf['z'] == 0).mean()
-        P_z1 = (ldf['z'] == 1).mean()
+        p_z0 = (ldf['z'] == 0).mean()
+        p_z1 = (ldf['z'] == 1).mean()
         ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_z0, 'r'] = -1 / P_z0
-        ldf.loc[filt__yhat1_giv_z1, 'r'] = 1 / P_z1
+        ldf.loc[filt__yhat1_giv_z0, 'r'] = -1 / p_z0
+        ldf.loc[filt__yhat1_giv_z1, 'r'] = 1 / p_z1
         c = -1 * ldf['r']  # Negative since maximizing not minimizing
         return c
 
     def _construct_reward__split2(self, ldf):
         """
-        Constructs the reward function for Disparate Impact opt_problem 2.
+        Constructs the reward function for Demographic Parity opt_problem 2.
         opt_problem 2 is when we constrain P(yhat=1|z=1) >= P(yhat=1|z=0), in
         which case the reward penalizes giving the Z=1 group the positive
         prediction.
@@ -302,11 +316,11 @@ class DisparateImpactObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        P_z0 = (ldf['z'] == 0).mean()
-        P_z1 = (ldf['z'] == 1).mean()
+        p_z0 = (ldf['z'] == 0).mean()
+        p_z1 = (ldf['z'] == 1).mean()
         ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_z0, 'r'] = 1 / P_z0
-        ldf.loc[filt__yhat1_giv_z1, 'r'] = -1 / P_z1
+        ldf.loc[filt__yhat1_giv_z0, 'r'] = 1 / p_z0
+        ldf.loc[filt__yhat1_giv_z1, 'r'] = -1 / p_z1
         c = -1 * ldf['r']  # Negative since maximizing not minimizing
         return c
 
@@ -343,6 +357,9 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
             p_yhat_eq_1_giv_y_eq_1_z_eq_0 - p_yhat_eq_1_giv_y_eq_1_z_eq_1,
             p_yhat_eq_1_giv_y_eq_1_z_eq_1 - p_yhat_eq_1_giv_y_eq_1_z_eq_0,
         ])
+        if np.isnan(mu):
+            mu = 1
+
         return mu
 
     def _compute_A_ub_row__split1(self, ldf):
@@ -364,11 +381,13 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         """
         n_actions = 2
         ldf = ldf.copy()
-        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        p_z0_y1 = ((ldf['z'] == 0) & (ldf['y'] == 1)).mean()
+        p_z1_y1 = ((ldf['z'] == 1) & (ldf['y'] == 1)).mean()
         ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_y1_z0, 'A_ub'] = -1
-        ldf.loc[filt__yhat1_giv_y1_z1, 'A_ub'] = 1
+        ldf.loc[filt__yhat1_y1_z0, 'A_ub'] = -1 / p_z0_y1
+        ldf.loc[filt__yhat1_y1_z1, 'A_ub'] = 1 / p_z1_y1
         return ldf['A_ub']
 
     def _compute_A_ub_row__split2(self, ldf):
@@ -390,11 +409,13 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         """
         n_actions = 2
         ldf = ldf.copy()
-        filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        filt__yhat1_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        p_z0_y1 = ((ldf['z'] == 0) & (ldf['y'] == 1)).mean()
+        p_z1_y1 = ((ldf['z'] == 1) & (ldf['y'] == 1)).mean()
         ldf['A_ub'] = 0.0
-        ldf.loc[filt__yhat1_giv_y1_z0, 'A_ub'] = 1
-        ldf.loc[filt__yhat1_giv_y1_z1, 'A_ub'] = -1
+        ldf.loc[filt__yhat1_y1_z0, 'A_ub'] = 1 / p_z0_y1
+        ldf.loc[filt__yhat1_y1_z1, 'A_ub'] = -1 / p_z1_y1
         return ldf['A_ub']
 
     def _construct_reward__split1(self, ldf):
@@ -417,17 +438,17 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
         filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        P_y1_z0 = ((ldf['y'] == 1) & (ldf['z'] == 0)).mean()
-        P_y1_z1 = ((ldf['y'] == 1) & (ldf['z'] == 1)).mean()
+        p_y1_z0 = ((ldf['y'] == 1) & (ldf['z'] == 0)).mean()
+        p_y1_z1 = ((ldf['y'] == 1) & (ldf['z'] == 1)).mean()
         ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = -1 / P_y1_z0
-        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = 1 / P_y1_z0
+        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = -1 / p_y1_z0
+        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = 1 / p_y1_z0
         c = -1 * ldf['r']  # Negative since maximizing not minimizing
         return c
 
     def _construct_reward__split2(self, ldf):
         """
-        Constructs the reward function for Disparate Impact opt_problem 1.
+        Constructs the reward function for Demographic Parity opt_problem 1.
         opt_problem 1 is when we constrain P(yhat=1|y=1,z=0) >= P(yhat=1|y=1,z=1), in
         which case the reward penalizes giving the Z=0 group the positive
         prediction.
@@ -445,11 +466,158 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
         filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        P_y1_z0 = ((ldf['y'] == 1) & (ldf['z'] == 0)).mean()
-        P_y1_z1 = ((ldf['y'] == 1) & (ldf['z'] == 1)).mean()
+        p_y1_z0 = ((ldf['y'] == 1) & (ldf['z'] == 0)).mean()
+        p_y1_z1 = ((ldf['y'] == 1) & (ldf['z'] == 1)).mean()
         ldf['r'] = np.zeros(len(ldf))
-        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = 1 / P_y1_z0
-        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = -1 / P_y1_z0
+        ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = 1 / p_y1_z0
+        ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = -1 / p_y1_z0
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class PredictiveEqualityObjective(AbsoluteValueObjective):
+
+    def __init__(self):
+        self.name = 'PredEq'
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_1_giv_y_eq_0_z_eq_0 = (
+            ((demo['yhat'] == 1) & (demo['y'] == 0) & (demo['z'] == 0)).sum()
+            / ((demo['y'] == 0) & (demo['z'] == 0)).sum()
+        )
+        p_yhat_eq_1_giv_y_eq_0_z_eq_1 = (
+            ((demo['yhat'] == 1) & (demo['y'] == 0) & (demo['z'] == 1)).sum()
+            / ((demo['y'] == 0) & (demo['z'] == 1)).sum()
+        )
+        mu = 1 - max([
+            p_yhat_eq_1_giv_y_eq_0_z_eq_0 - p_yhat_eq_1_giv_y_eq_0_z_eq_1,
+            p_yhat_eq_1_giv_y_eq_0_z_eq_1 - p_yhat_eq_1_giv_y_eq_0_z_eq_0,
+        ])
+        return mu
+
+    def _compute_A_ub_row__split1(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=1|y=0,z=0) >= P(yhat=1|y=0,z=1)
+            ```
+        which is Predictive Equality opt_problem 1.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhat1_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        p_z0_y0 = ((ldf['z'] == 0) & (ldf['y'] == 0)).mean()
+        p_z1_y0 = ((ldf['z'] == 1) & (ldf['y'] == 0)).mean()
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhat1_y0_z0, 'A_ub'] = -1 / p_z0_y0
+        ldf.loc[filt__yhat1_y0_z1, 'A_ub'] = 1 / p_z1_y0
+        return ldf['A_ub']
+
+    def _compute_A_ub_row__split2(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=1|y=0,z=1) >= P(yhat=1|y=0,z=0)
+            ```
+        which is Equal Opportunity opt_problem 2.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhat1_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        p_z0_y0 = ((ldf['z'] == 0) & (ldf['y'] == 0)).mean()
+        p_z1_y0 = ((ldf['z'] == 1) & (ldf['y'] == 0)).mean()
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhat1_y0_z0, 'A_ub'] = 1 / p_z0_y0
+        ldf.loc[filt__yhat1_y0_z1, 'A_ub'] = -1 / p_z1_y0
+        return ldf['A_ub']
+
+    def _construct_reward__split1(self, ldf):
+        """
+        Constructs the reward function for Equal Opportunity  opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=1|y=0,z=0) >= P(yhat=1|y=0,z=1), in
+        which case the reward penalizes giving the Z=0 group the positive
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        p_y0_z0 = ((ldf['y'] == 0) & (ldf['z'] == 0)).mean()
+        p_y0_z1 = ((ldf['y'] == 0) & (ldf['z'] == 1)).mean()
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y0_z0, 'r'] = -1 / p_y0_z0
+        ldf.loc[filt__yhat1_giv_y0_z1, 'r'] = 1 / p_y0_z0
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+    def _construct_reward__split2(self, ldf):
+        """
+        Constructs the reward function for Demographic Parity opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=1|y=0,z=0) >= P(yhat=1|y=0,z=1), in
+        which case the reward penalizes giving the Z=0 group the positive
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        filt__yhat1_giv_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        p_y0_z0 = ((ldf['y'] == 0) & (ldf['z'] == 0)).mean()
+        p_y0_z1 = ((ldf['y'] == 0) & (ldf['z'] == 1)).mean()
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y0_z0, 'r'] = 1 / p_y0_z0
+        ldf.loc[filt__yhat1_giv_y0_z1, 'r'] = -1 / p_y0_z0
         c = -1 * ldf['r']  # Negative since maximizing not minimizing
         return c
 
@@ -620,8 +788,8 @@ class ClassificationMDP:
     ldf_ : pandas.DataFrame
         "Lambda dataframe". One row for each state and action combination.
         Columns are **x_cols, z, y, yhat.
-    b_ub_disp_imp_ : np.array<float>, len(n_states_)
-        The uppber bound `b` for Disparate Impact Split1 and Split2.
+    b_ub_dem_par_ : np.array<float>, len(n_states_)
+        The uppber bound `b` for Demographic Parity Split1 and Split2.
     opt_problems_ : array<dict>
         Array of each linear optimization "sub" problem to solve. Each
         opt_problem is a dict with the following structure:
@@ -919,12 +1087,12 @@ def _find_best_policies_from_multiple_opt_problems(best_policies_best_rewards):
         ```
         best_policies_best_rewards =
             {
-                'policies': list(opt_pols_disp_imp_split1_adult),
-                'reward': np.round(opt_rew_disp_imp_split1_adult, decimals=6)
+                'policies': list(opt_pols_dem_par_split1_adult),
+                'reward': np.round(opt_rew_dem_par_split1_adult, decimals=6)
             },
             {
-                'policies': list(opt_pols_disp_imp_split2_adult),
-                'reward': np.round(opt_rew_disp_imp_split2_adult, decimals=6)
+                'policies': list(opt_pols_dem_par_split2_adult),
+                'reward': np.round(opt_rew_dem_par_split2_adult, decimals=6)
             },
         )
         ```

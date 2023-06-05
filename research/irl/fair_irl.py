@@ -198,17 +198,51 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
     return mu, demos
 
 
-def irl_error(w, muE, muj):
+def irl_error(w, muE, muL):
     """
-    Computes t[i] = wT(muE-mu[j])
+    Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
+
+    Parameters
+    ----------
+    w : np.array<float>
+        Weights.
+    muE : array-like<np.array<float>>, shape (n_expert_demos, len(len(objective_set.objectives)))
+        Array of all expert feature expectations.
+    muL : array-like<array-like<float>>
+        List of all learned feature expectations.
+
+    Returns
+    -------
+    best_err : float
+        The error of the best policy, and therefore the IRL error.
+    best_j : int
+        The index of the best policy in muL.
+    mu_deltas[best_j] : array<float>
+        The array of differences between muE and muL[best_j].
+    l2_mu_delta[best_j] : float
+        The l2 norm of the muE and muL deltas.
     """
-    mu_delta = muE.mean(axis=0) - muj
-    l2_mu_delta = np.linalg.norm(mu_delta)
-    l2_w = np.linalg.norm(w)
-    err = l2_w * l2_mu_delta
-    # 05/14/2023 – Added this to see if it fixes issue where lower weights are preferred
-    # err = err / l2_w
-    return err, mu_delta, l2_mu_delta
+    mu_deltas = np.zeros((len(muL), muE.shape[1]))
+    l2_mu_deltas = np.zeros(len(muL))
+    best_err = np.inf
+    best_j = None
+
+    # Find best muj
+    for j, muj in enumerate(muL):
+        mu_deltas[j] = muE.mean(axis=0) - muj
+        l2_mu_deltas[j] = np.linalg.norm(mu_deltas[j])
+        l2_w = np.linalg.norm(w)
+        err = l2_w * l2_mu_deltas[j]
+        # # NOTE: 05/20/2023 – Added this to see if it fixes issue where lower weights are preferred
+        err = err / l2_w
+        # NOTE: 05/21/2023 - Replaced above with this since I think it's correct
+        # Nevermind. it doesn't do as well. Keeping above.
+        # err = np.linalg.norm(w * mu_deltas[j])
+        if err < best_err:
+            best_err = err
+            best_j = j
+
+    return best_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]
 
 
 def sklearn_clf_pipeline(feature_types, clf_inst):
@@ -330,10 +364,10 @@ def generate_single_exp_results_df(obj_set, results):
         The objective set.
     data : list<list>
         The results.
-
-    exp_df : pandas.DataFrame
+    results : pandas.DataFrame
         A dataframe with relevant weight, feat exp, and error columns for the
-        best learned policy.
+        best learned policy. Each row is produced by the `new_trial_result()`
+        method.
     """
     exp_df_cols = []
 
@@ -350,7 +384,9 @@ def generate_single_exp_results_df(obj_set, results):
 
     for obj in obj_set.objectives:
         exp_df_cols.append(f"muL_{obj.name}")
+        exp_df_cols.append(f"muL_best_{obj.name}")
         exp_df_cols.append(f"muL_hold_{obj.name}")
+        exp_df_cols.append(f"muL_best_hold_{obj.name}")
 
     for obj in obj_set.objectives:
         exp_df_cols.append(f"muL_err_{obj.name}")
@@ -359,11 +395,15 @@ def generate_single_exp_results_df(obj_set, results):
     exp_df_cols.append('muL_err_l2norm')
     exp_df_cols.append('muL_hold_err_l2norm')
 
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muE_target_{obj.name}")
+        exp_df_cols.append(f"muL_target_hold_{obj.name}")
+
     exp_df = pd.DataFrame(results, columns=exp_df_cols)
 
     return exp_df
 
-def new_trial_result(obj_set, muE, muE_hold, df_irl):
+def new_trial_result(obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target_hold=None):
     result = []
 
     for i, obj in enumerate(obj_set.objectives):
@@ -376,11 +416,17 @@ def new_trial_result(obj_set, muE, muE_hold, df_irl):
         muE_hold_std = np.std(muE_hold[:, i])
         result += [muE_hold_mean, muE_hold_std]
 
-    best_idx = (
+    best_t = (
         df_irl.query('(is_expert == 0) and (is_init_policy == 0)')
         .sort_values('t')
+        ['t'].values[0]
+    )
+    best_idx = (
+        df_irl.query('(is_expert == 0) and (is_init_policy == 0) and abs(t - @best_t) <= .0001')
+        .sort_index()
         .index[0]
     )
+
     best_row = df_irl.loc[best_idx]
 
     for i, obj in enumerate(obj_set.objectives):
@@ -388,7 +434,9 @@ def new_trial_result(obj_set, muE, muE_hold, df_irl):
 
     for obj in obj_set.objectives:
         result.append(best_row[f"{obj.name}"])
+        result.append(best_row[f"muL_best_{obj.name}"])
         result.append(best_row[f"muL_hold_{obj.name}"])
+        result.append(best_row[f"muL_best_hold_{obj.name}"])
 
     for i, obj in enumerate(obj_set.objectives):
         _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE_hold[:, i]))
@@ -398,6 +446,10 @@ def new_trial_result(obj_set, muE, muE_hold, df_irl):
 
     result.append(best_row['mu_delta_l2norm'])
     result.append(best_row['mu_delta_l2norm_hold'])
+
+    for i, obj in enumerate(obj_set.objectives):
+        result.append(muE_target[i])
+        result.append(muL_target_hold[i])
 
     return result
 
