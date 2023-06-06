@@ -17,8 +17,12 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.tree import DecisionTreeClassifier
 
+
+# Color palette for plotting
 cp = sns.color_palette()
 
+
+# Objective looup
 OBJ_LOOKUP_BY_NAME = {
     'Acc': AccuracyObjective,
     'DemPar': DemographicParityObjective,
@@ -27,14 +31,35 @@ OBJ_LOOKUP_BY_NAME = {
 }
 
 
-def generate_dataset(dataset, n_samples):
+def generate_dataset(dataset_name, n_samples):
+    """
+    Helper method that returns a dataset based on the specified label.
 
-    if dataset == 'Adult':
+    Parameters
+    ----------
+    dataset_name : str
+        Name of the dataset.
+    n_samples : int
+        Number of samples to return from the dataset.
+
+    Returns
+    -------
+    X : pandas.DataFrame
+        The X (including z) columns.
+    y : pandas.Series
+        Just the y column.
+    feature_types : dict<str, array-like>
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines.
+    """
+    if dataset_name == 'Adult':
         X, y, feature_types = generate_adult_dataset(n_samples)
-    elif dataset == 'COMPAS':
+    elif dataset_name == 'COMPAS':
         X, y, feature_types = generate_compas_dataset(n_samples)
-    elif dataset == 'Boston':
+    elif dataset_name == 'Boston':
         X, y, feature_types = generate_boston_housing_dataset(n_samples)
+    else:
+        raise ValueError(f"Unrecognized dataset name: {dataset_name}")
 
     X = X[
         feature_types['boolean']
@@ -64,12 +89,13 @@ def generate_adult_dataset(
 
     Returns
     -------
-    df : pandas.DataFrame
-        The X and y all as one dataframe.
     X : pandas.DataFrame
         The X (including z) columns.
     y : pandas.Series
         Just the y column.
+    feature_types : dict<str, array-like>
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines.
     """
     data = fetch_adult(as_frame=True)
     df = data.data.copy()
@@ -159,12 +185,13 @@ def generate_compas_dataset(
 
     Returns
     -------
-    df : pandas.DataFrame
-        The X and y all as one dataframe.
     X : pandas.DataFrame
         The X (including z) columns.
     y : pandas.Series
         Just the y column.
+    feature_types : dict<str, array-like>
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines.
     """
 
     # Import dataset
@@ -240,12 +267,13 @@ def generate_boston_housing_dataset(n=10_000):
 
     Returns
     -------
-    df : pandas.DataFrame
-        The X and y all as one dataframe.
     X : pandas.DataFrame
         The X (including z) columns.
     y : pandas.Series
         Just the y column.
+    feature_types : dict<str, array-like>
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines.
     """
     data = fetch_boston(as_frame=True)
     df = data.data.copy()
@@ -284,9 +312,9 @@ def generate_boston_housing_dataset(n=10_000):
         ],
         'continuous': [
             # 'CRIM',  # per capita crime rate by town
-            # 'ZN',  # proportion of residential land zoned for lots over 25,000 sq.ft.
-            # 'INDUS',  # proportion of non-retail business acres per town
-            # 'CHAS',  # Charles River dummy variable (= 1 if tract bounds river; 0 otherwise)
+            # 'ZN',  # prop of residential land zoned for lots over 25,000 sqft
+            # 'INDUS',  # prop of non-retail business acres per town
+            # 'CHAS',  # Charles River dummy var (= 1 if bounds river; else 0)
             # 'NOX',  # nitric oxides concentration (parts per 10 million)
             # 'RM',  # average number of rooms per dwelling
             # 'AGE',  # proportion of owner-occupied units built prior to 1940
@@ -294,7 +322,7 @@ def generate_boston_housing_dataset(n=10_000):
             # 'RAD',  # index of accessibility to radial highways
             # 'TAX',  # full-value property-tax rate per $10,000
             # 'PTRATIO',  # pupil-teacher ratio by town
-            # 'B', # 1000(Bk - 0.63)^2 where Bk is the proportion of Black people by town
+            # 'B', # 1000(Bk - 0.63)^2 where Bk is the proportion of Black ppl
             # 'LSTAT',  # % lower status of the population
         ],
         'meta': [
@@ -307,7 +335,12 @@ def generate_boston_housing_dataset(n=10_000):
     return X, y, feature_types
 
 
-class ReductionWrapper():
+class FairLearnSkLearnWrapper():
+    """
+    Wrapper around scikit-learn classifiers to make them compatible with
+    fairlearn classifiers, which require an additional `sensitive_features`
+    attribute to be passed in when calling `fit` and `predict`.
+    """
     def __init__(self, clf, sensitive_features):
         self.clf = clf
         self.sensitive_features = sensitive_features
@@ -329,7 +362,85 @@ class ReductionWrapper():
         )
 
 
-def generate_all_exp_results_df(obj_set, n_trials, data_demo, exp_algo, irl_method):
+def generate_expert_algo_lookup(feature_types):
+    """
+    Parameters
+    ----------
+    feature_types : dict<str, array-like>
+        Mapping of column names to their type of feature. Used to when
+        constructing the sklearn pipeline.
+
+    Returns
+    -------
+    expert_algo_lookup : dict<str, sklearn.pipeline>
+        The expert algo lookup dictionary that maps the string name for an
+        algorithm to the actual implementation.
+    """
+    # OptAcc
+    opt_acc_pipe = sklearn_clf_pipeline(
+        feature_types,
+        RandomForestClassifier(),
+    )
+
+    # HardtDemPar
+    dem_par_thresh_opt = ThresholdOptimizer(
+        constraints='demographic_parity',
+        predict_method="predict",
+        prefit=False,
+        estimator=sklearn_clf_pipeline(
+            feature_types=feature_types,
+            # clf_inst=RandomForestClassifier(), # Messes up DemPar. Why?
+            clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
+        )
+    )
+    dem_par_wrapper = FairLearnSkLearnWrapper(
+        clf=dem_par_thresh_opt,
+        sensitive_features='z',
+    )
+
+    # HardtEqOpp
+    eq_opp_thresh_opt = ThresholdOptimizer(
+        constraints='true_positive_rate_parity',
+        predict_method="predict",
+        prefit=False,
+        estimator=sklearn_clf_pipeline(
+            feature_types=feature_types,
+            clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
+        )
+    )
+    eq_opp_wrapper = FairLearnSkLearnWrapper(
+        clf=eq_opp_thresh_opt,
+        sensitive_features='z',
+    )
+
+    # PredEq
+    pred_eq_thresh_opt = ThresholdOptimizer(
+        constraints='false_negative_rate_parity',
+        predict_method="predict",
+        prefit=False,
+        estimator=sklearn_clf_pipeline(
+            feature_types=feature_types,
+            clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
+        )
+    )
+    pred_eq_wrapper = FairLearnSkLearnWrapper(
+        clf=pred_eq_thresh_opt,
+        sensitive_features='z',
+    )
+
+    expert_algo_lookup = {
+        'OptAcc': opt_acc_pipe,
+        'HardtDemPar': dem_par_wrapper,
+        'HardtEqOpp': eq_opp_wrapper,
+        'PredEq': pred_eq_wrapper,
+    }
+
+    return expert_algo_lookup
+
+
+def generate_all_exp_results_df(
+        obj_set, n_trials, data_demo, exp_algo, irl_method,
+):
     """
     Generate dataframe for experiment parameters and results
 
@@ -428,7 +539,40 @@ def generate_single_exp_results_df(obj_set, results):
 
     return exp_df
 
-def new_trial_result(obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target_hold=None):
+def new_trial_result(
+        obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target_hold=None,
+):
+    """
+    Generates a row of "results", which are collected and persisted for each
+    experiment.
+
+    Parameters
+    ---------
+    obj_set : research.irl.fair_irl.ObjectiveSet
+        The set of objectives.
+    muE : array-like<float>, shape(n_expert_demos, n_objectives)
+        The feature expectations of the expert demonstrations, specifically on
+        the demo set.
+    muE : array-like<float>, shape(n_expert_demos, n_objectives)
+        The feature expectations of the expert demonstrations on the hold out
+        set.
+    df_irl : pandas.DataFrame
+        A collection of results where each row represents either an expert demo
+        (and therefore a positive SVM training example) or a learned policy
+        (and therefore a negative SVM training example). Includes relevant
+        items like learned weights, feature expectations, error, etc.
+    muE_target : array-like<float>. Shape(n_expert_demos, n_objectives).
+        The feature expectations of running the expert algo on the target
+        domain demo set.
+    muL_target_hold
+        The feature expectations of running the expert algo on the target
+        domain holdout set.
+
+    Returns
+    -------
+    result : list<list<numeric>>
+        The new result row.
+    """
     result = []
 
     for i, obj in enumerate(obj_set.objectives):
@@ -447,11 +591,14 @@ def new_trial_result(obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target
         ['t'].values[0]
     )
     best_idx = (
-        df_irl.query('(is_expert == 0) and (is_init_policy == 0) and abs(t - @best_t) <= .0001')
+        df_irl[
+            (df_irl['is_expert'] == 0) &
+            (df_irl['is_init_policy'] == 0)
+        ]
+        .query('abs(t - @best_t) <= .0001')
         .sort_index()
         .index[0]
     )
-
     best_row = df_irl.loc[best_idx]
 
     for i, obj in enumerate(obj_set.objectives):
@@ -465,7 +612,9 @@ def new_trial_result(obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target
 
     for i, obj in enumerate(obj_set.objectives):
         _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE_hold[:, i]))
-        _muL_hold_err = abs(best_row[f"muL_hold_{obj.name}"] - np.mean(muE_hold[:, i]))
+        _muL_hold_err = abs(
+            best_row[f"muL_hold_{obj.name}"] - np.mean(muE_hold[:, i])
+        )
         result.append(_muL_err)
         result.append(_muL_hold_err)
 
@@ -512,7 +661,6 @@ def run_trial_source_domain(exp_info):
     t_hold : array-like<float>. Shape(n_irl_loop_iters)
         The irl error on the holdout set.
     """
-
     # Initiate objectives
     objectives = []
     for obj_name in exp_info['OBJECTIVE_NAMES']:
@@ -526,106 +674,57 @@ def run_trial_source_domain(exp_info):
     else:
         CAN_OBSERVE_Y = False
 
-    ##
     # Reset the objective set since they get fitted in each trial run
-    ##
     obj_set.reset()
 
-    ##
     # Read in dataset
-    ##
-    X, y, feature_types = generate_dataset(exp_info['DATASET'], n_samples=exp_info['N_DATASET_SAMPLES'])
+    X, y, feature_types = generate_dataset(
+        exp_info['DATASET'],
+        n_samples=exp_info['N_DATASET_SAMPLES'],
+    )
+
+    # These are the feature type sthat will be used as inputs for the expert
+    # classifier.
+    expert_demo_feature_types = feature_types
 
     # These are the feature types that will be used in the classifier that will
     # predict `y` given `X` when learning the optimal policy for a given reward
     # function.
-    expert_demo_feature_types = feature_types
     irl_loop_feature_types = feature_types
 
-    pipe = sklearn_clf_pipeline(
-        feature_types=expert_demo_feature_types,
-    #     clf_inst=RandomForestClassifier(),  # For some resaon, using a RF here prevents the ThresholdOptimizer from obtaining a decent value on Demographic Parity
-        clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-    )
-    dem_par_clf = ThresholdOptimizer(
-        estimator=pipe,
-        constraints='demographic_parity',
-        # objective='selection_rate',
-        predict_method="predict",
-        prefit=False,
-    )
-    dem_par_reduction = ReductionWrapper(
-        clf=dem_par_clf,
-        sensitive_features='z',
-    )
-    pipe = sklearn_clf_pipeline(
-        feature_types=expert_demo_feature_types,
-        # clf_inst=RandomForestClassifier(),  # For some resaon, using a RF here prevents the ThresholdOptimizer from obtaining a decent value on Demographic Parity
-        clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-    )
-    eq_opp_clf = ThresholdOptimizer(
-        estimator=pipe,
-        constraints='true_positive_rate_parity',
-        predict_method="predict",
-        prefit=False,
-    )
-    eq_opp_reduction = ReductionWrapper(
-        clf=eq_opp_clf,
-        sensitive_features='z',
-    )
-    pred_eq_clf = ThresholdOptimizer(
-        estimator=pipe,
-        constraints='false_negative_rate_parity',
-        predict_method="predict",
-        prefit=False,
-    )
-    pred_eq_reduction = ReductionWrapper(
-        clf=pred_eq_clf,
-        sensitive_features='z',
-    )
+    expert_algo_lookup = generate_expert_algo_lookup(expert_demo_feature_types)
 
-    EXPERT_ALGO_LOOKUP = {
-        'OptAcc': sklearn_clf_pipeline(expert_demo_feature_types, RandomForestClassifier()),
-        'OptAccDecTree': sklearn_clf_pipeline(expert_demo_feature_types, clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4)),
-        # 'pos_pred_to_female_only': ManualClassifier(lambda row: int(row['sex'] == 'Female')),
-        'HardtDemPar': dem_par_reduction,
-        'HardtEqOpp': eq_opp_reduction,
-        'PredEq': pred_eq_reduction,
-    }
-
-    ##
     # Split data into 3 sets.
     #     1. Demo - Produces expert demonstratinos
     #         1A. Train – Used for predicting Y from Z,X
     #         1B. Test – used for comparing muL with muE
     #     2. Hold – computes the unbiased values for muL and t (dataset is
     #.       never shown to the IRL learning algo.)
-    ##
     X_demo, X_hold, y_demo, y_hold = train_test_split(X, y, test_size=.2)
-    X_train, X_test, y_train, y_test = train_test_split(X_demo, y_demo, test_size=.5)
-    del X_demo, y_demo # Make sure I don't acidentally use these variables later on
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_demo,
+        y_demo,
+        test_size=.5,
+    )
+    del X_demo, y_demo # Make sure I don't acidentally use these later on
 
-    ##
     # Generate expert demonstrations to learn from
-    ##
     muE, demosE = generate_demos_k_folds(
         X=X_test,
         y=y_test,
-        clf=EXPERT_ALGO_LOOKUP[exp_info['EXPERT_ALGO']],
+        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
         obj_set=obj_set,
         n_demos=exp_info['N_EXPERT_DEMOS'],
     )
     logging.info(f"muE:\n{muE}")
 
-    ##
     # Generate expert demonstrations to learn for computing learned
     # performance. These expert demos are never shown to the IRL algo and are
     # only used for performance measurement.
-    ##
     muE_hold, demosE_hold = generate_demos_k_folds(
         X=X_hold,
         y=y_hold,
-        clf=EXPERT_ALGO_LOOKUP[exp_info['EXPERT_ALGO']],
+        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
         obj_set=obj_set,
         n_demos=exp_info['N_EXPERT_DEMOS'],
     )
@@ -633,17 +732,18 @@ def run_trial_source_domain(exp_info):
 
     ##
     # Run IRL loop.
-    # Create a clf dataset where inputs are feature expectations and outputs are
-    # whether the policy is expert or learned through IRL iterations. Then train
-    # an SVM classifier on this dataset. Then extract the weights of the svm and
-    # use them as the weights for the "reward" function. Then use this reward
-    # function to learn a policy (classifier). Then compute the feature
-    # expectations from this classifer on the irl hold-out set. Then compute the
-    # error between the feature expectations of this learned clf and the
+    # Create a clf dataset where inputs are feature expectations and outputs
+    # are whether the policy is expert or learned through IRL iterations. Then
+    # train an SVM classifier on this dataset. Then extract the weights of the
+    # svm and use them as the weights for the "reward" function. Then use this
+    # reward function to learn a policy (classifier). Then compute the feature
+    # expectations from this classifer on the irl hold-out set. Then compute
+    # the error between the feature expectations of this learned clf and the
     # demonstration feature exp. If this error is less than epsilon, stop. The
     # reward function is the final set of weights.
     ##
 
+    # Initiate variables needed to run IRL Loop
     x_cols = (
         irl_loop_feature_types['boolean']
         + irl_loop_feature_types['categoric']
@@ -651,7 +751,6 @@ def run_trial_source_domain(exp_info):
     )
     x_cols.remove('z')
     obj_set_cols = [obj.name for obj in obj_set.objectives]
-
 
     # Generate initial learned policies
     mu, _demos = generate_demos_k_folds(
@@ -680,17 +779,24 @@ def run_trial_source_domain(exp_info):
     mu_best_history = []
     mu_best_hold_history = []
 
+    # Start the IRL Loop
     logging.debug('')
     logging.debug('Starting IRL Loop ...')
 
     while True:
         logging.info(f"\tIRL Loop iteration {i+1}/{exp_info['MAX_ITER']} ...")
 
-        # Train SVM classifier that distinguishes which demonstrations are expert
-        # and which were generated from this loop.
+        # Train SVM classifier that distinguishes which demonstrations are
+        # expert and which were generated from this loop.
         logging.debug('\tFitting SVM classifier...')
-        X_irl = pd.concat([X_irl_exp, X_irl_learn], axis=0).reset_index(drop=True)
-        y_irl = pd.concat([y_irl_exp, y_irl_learn], axis=0).reset_index(drop=True)
+        X_irl = (
+            pd.concat([X_irl_exp, X_irl_learn], axis=0)
+            .reset_index(drop=True)
+        )
+        y_irl = (
+            pd.concat([y_irl_exp, y_irl_learn], axis=0)
+            .reset_index(drop=True)
+        )
         svm = SVM().fit(X_irl, y_irl)
         wi = svm.weights()
         weights.append(wi)
@@ -722,6 +828,11 @@ def run_trial_source_domain(exp_info):
             method=exp_info['METHOD'],
         )
 
+        ##
+        # Measure and record the error of the learned policy, and keep it as
+        # a negative training example for next IRL Loop iteration.
+        ##
+
         # Compute feature expectations of the learned policy
         logging.debug('\tGenerating learned demostration...')
         demo = generate_demo(clf_pol, X_test, y_test, can_observe_y=CAN_OBSERVE_Y)
@@ -742,8 +853,20 @@ def run_trial_source_domain(exp_info):
         y_irl_learn = pd.concat([y_irl_learn, y_irl_learn_i], axis=0)
 
         # Compute error of the learned policy: t[i] = wT(muE-mu[j])
-        ti, best_j, mu_delta, mu_delta_l2norm = irl_error(wi, muE, mu_history, norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'])
-        ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(wi, muE_hold, mu_hold_history, norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'])
+        # This is equivalent to computing the SVM margin.
+        ti, best_j, mu_delta, mu_delta_l2norm = irl_error(
+            wi,
+            muE,
+            mu_history,
+            norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'],
+        )
+        # Do it for the hold-out set as well.
+        ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(
+            wi,
+            muE_hold,
+            mu_hold_history,
+            norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'],
+        )
         mu_best_history.append(mu_history[best_j])
         mu_best_hold_history.append(mu_hold_history[best_j])
         t.append(ti)
@@ -759,7 +882,10 @@ def run_trial_source_domain(exp_info):
         ## Show a summary of the learned policy
         # logging.info(
         #     df_to_log(
-        #         demo.groupby(['z']+x_cols+['y', 'yhat'])[['age']].agg(['count']),
+        #         (
+        #             demo.groupby(['z']+x_cols+['y', 'yhat'])
+        #             [['age']].agg(['count'])
+        #         ),
         #         title='\tLearned Policy:',
         #         tab_level=3,
         #     )
@@ -773,7 +899,7 @@ def run_trial_source_domain(exp_info):
         # End IRL Loop
 
     ##
-    # Book keeping
+    # Book keeping stuff for the trial.
     ##
 
     # Compare the best learned policy with the expert demonstrations
@@ -796,62 +922,136 @@ def run_trial_source_domain(exp_info):
     df_irl = X_irl.copy()
     df_irl['is_expert'] = y_irl.copy()
     for i, col in enumerate(obj_set_cols):
-        df_irl[f"muL_best_{col}"] = np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']).tolist() + np.array(mu_best_history)[:, i].tolist()
-        df_irl[f"muL_hold_{col}"] = np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']).tolist() + np.array(mu_hold_history)[:, i].tolist()
-        df_irl[f"muL_best_hold_{col}"] = np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']).tolist() + np.array(mu_best_hold_history)[:, i].tolist()
-    df_irl['is_init_policy'] = np.zeros(exp_info['N_EXPERT_DEMOS']).tolist() + np.ones(exp_info['N_INIT_POLICIES']).tolist() + np.zeros(len(t)).tolist()
-    df_irl['learn_idx'] = list(-1*np.ones(exp_info['N_EXPERT_DEMOS'])) + list(np.arange(exp_info['N_INIT_POLICIES'] + len(t)))
+        df_irl[f"muL_best_{col}"] = (
+            np.zeros(
+                exp_info['N_EXPERT_DEMOS'] + exp_info['N_INIT_POLICIES']
+            ).tolist() + np.array(mu_best_history)[:, i].tolist()
+        )
+        df_irl[f"muL_hold_{col}"] = (
+            np.zeros(
+                exp_info['N_EXPERT_DEMOS'] + +exp_info['N_INIT_POLICIES']
+            ).tolist() + np.array(mu_hold_history)[:, i].tolist()
+        )
+        df_irl[f"muL_best_hold_{col}"] = (
+            np.zeros(
+                exp_info['N_EXPERT_DEMOS'] + exp_info['N_INIT_POLICIES']
+            ).tolist() + np.array(mu_best_hold_history)[:, i].tolist()
+        )
+    df_irl['is_init_policy'] = (
+        np.zeros(exp_info['N_EXPERT_DEMOS']).tolist()
+        + np.ones(exp_info['N_INIT_POLICIES']).tolist()
+        + np.zeros(len(t)).tolist()
+    )
+    df_irl['learn_idx'] = (
+        list(-1*np.ones(exp_info['N_EXPERT_DEMOS']))
+        + list(np.arange(exp_info['N_INIT_POLICIES'] + len(t)))
+    )
     for i, col in enumerate(obj_set_cols):
-        df_irl[f"{col}_weight"] = np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']).tolist() + [w[i] for w in weights]
-    df_irl['t'] = list(np.inf*(np.ones(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']))) + t
-    df_irl['t_hold'] = list(np.inf*(np.ones(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']))) + t_hold
-    df_irl['mu_delta_l2norm'] = np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']).tolist() + mu_delta_l2norm_hist
-    df_irl['mu_delta_l2norm_hold'] = np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']).tolist() + mu_delta_l2norm_hold_hist
+        df_irl[f"{col}_weight"] = (
+            np.zeros(
+                exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES']
+            ).tolist() + [w[i] for w in weights]
+        )
+    df_irl['t'] = (
+        list(
+            np.inf*(
+                np.ones(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'])
+            )
+        ) + t
+    )
+    df_irl['t_hold'] = (
+        list(
+            np.inf*(
+                np.ones(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'])
+            )
+        ) + t_hold
+    )
+    df_irl['mu_delta_l2norm'] = (
+        np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'])
+        .tolist() + mu_delta_l2norm_hist
+    )
+    df_irl['mu_delta_l2norm_hold'] = (
+        np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'])
+        .tolist() + mu_delta_l2norm_hold_hist
+    )
     logging.debug('Experiment Summary')
     display(df_irl.round(3))
 
-    # ##
-    # # Plot results
-    # ##
-    # sns.set_theme(style='darkgrid', font_scale=1.2)
-    # feat_exp_combs = list(itertools.combinations(obj_set_cols, 2))
-    # exp = df_irl.query('is_expert == True').reset_index(drop=True)
-    # lrn = df_irl.query('is_expert == False').reset_index(drop=True)
-    # best_t_idx = lrn.query('t > 0')['t'].argmin()
-    # fig, axes = plt.subplots(1, len(feat_exp_combs), figsize=(5*len(feat_exp_combs), 4))
-    # axes = (axes,) if len(feat_exp_combs) == 1 else axes
-    # for i, (feat_exp_x, feat_exp_y) in enumerate(feat_exp_combs):
-    #     # Plot expert
-    #     axes[i].scatter(exp[feat_exp_x], exp[feat_exp_y], label='$\mu^E$', s=600, alpha=1, c='black')
-    #     # Inject noise so we can see the expert when it's overlapping
-    #     noise = exp_info['NOISE_FACTOR']*(np.random.rand(len(lrn))-.6)
-    #     # Plot the learned policies
-    #     axes[i].scatter(lrn[feat_exp_x]+noise, lrn[feat_exp_y]+noise, label='$\mu^L_i$', s=600, alpha=.7, c=cp[2])
-    #     axes[i].set_ylim([-.1, 1.1])
-    #     axes[i].set_xlim([-.1, 1.1])
-    #     axes[i].set_xlabel(feat_exp_x.replace('_', ' ').title())
-    #     axes[i].set_ylabel(feat_exp_y.replace('_', ' ').title())
-    #     if exp_info['ANNOTATE']:
-    #         # Label each learned policy with its ordered index
-    #         for idx, row in lrn.iterrows():
-    #             if row['is_init_policy']:
-    #                 annotation = None
-    #             else:
-    #                 annotation = idx
-    #             axes[i].annotate(annotation, (-.012+(row[feat_exp_x]+noise[idx]), -.015+(row[feat_exp_y]+noise[idx])), fontsize=16, fontweight=700)
-    #     # Color the best policy
-    #     axes[i].scatter([lrn.loc[best_t_idx][feat_exp_x]+noise[best_t_idx]], [lrn.loc[best_t_idx][feat_exp_y]+noise[best_t_idx]], label='Best $\mu^L_i$', s=600, alpha=1, c=cp[1])
-    #     axes[i].legend(ncol=1, labelspacing=.7, loc='upper left')
-    #
-    # plt.suptitle(f"Best learned weights: {best_weight.round(2)}")
-    # plt.tight_layout()
+     ###
+     ## Plot results
+     ###
+     #sns.set_theme(style='darkgrid', font_scale=1.2)
+     #feat_exp_combs = list(itertools.combinations(obj_set_cols, 2))
+     #exp = df_irl.query('is_expert == True').reset_index(drop=True)
+     #lrn = df_irl.query('is_expert == False').reset_index(drop=True)
+     #best_t_idx = lrn.query('t > 0')['t'].argmin()
+     #fig, axes = plt.subplots(
+     #    1,
+     #    len(feat_exp_combs),
+     #    figsize=(5*len(feat_exp_combs), 4),
+     #)
+     #axes = (axes,) if len(feat_exp_combs) == 1 else axes
+     #for i, (feat_exp_x, feat_exp_y) in enumerate(feat_exp_combs):
+     #    # Plot expert
+     #    axes[i].scatter(
+     #        exp[feat_exp_x],
+     #        exp[feat_exp_y],
+     #        label='$\mu^E$',
+     #        s=600,
+     #        alpha=1,
+     #        c='black',
+     #    )
+     #    # Inject noise so we can see the expert when it's overlapping
+     #    noise = exp_info['NOISE_FACTOR']*(np.random.rand(len(lrn))-.6)
+     #    # Plot the learned policies
+     #    axes[i].scatter(
+     #        lrn[feat_exp_x]+noise,
+     #        lrn[feat_exp_y]+noise,
+     #        label='$\mu^L_i$',
+     #        s=600,
+     #        alpha=.7,
+     #        c=cp[2],
+     #    )
+     #    axes[i].set_ylim([-.1, 1.1])
+     #    axes[i].set_xlim([-.1, 1.1])
+     #    axes[i].set_xlabel(feat_exp_x.replace('_', ' ').title())
+     #    axes[i].set_ylabel(feat_exp_y.replace('_', ' ').title())
+     #    if exp_info['ANNOTATE']:
+     #        # Label each learned policy with its ordered index
+     #        for idx, row in lrn.iterrows():
+     #            if row['is_init_policy']:
+     #                annotation = None
+     #            else:
+     #                annotation = idx
+     #            axes[i].annotate(
+     #                annotation,
+     #                (
+     #                    -.012+(row[feat_exp_x]+noise[idx]),
+     #                    -.015+(row[feat_exp_y]+noise[idx])
+     #                ),
+     #                fontsize=16,
+     #                fontweight=700,
+     #            )
+     #    # Color the best policy
+     #    axes[i].scatter(
+     #        [lrn.loc[best_t_idx][feat_exp_x]+noise[best_t_idx]],
+     #        [lrn.loc[best_t_idx][feat_exp_y]+noise[best_t_idx]],
+     #        label='Best $\mu^L_i$',
+     #        s=600,
+     #        alpha=1,
+     #        c=cp[1],
+     #    )
+     #    axes[i].legend(ncol=1, labelspacing=.7, loc='upper left')
+
+     #plt.suptitle(f"Best learned weights: {best_weight.round(2)}")
+     #plt.tight_layout()
 
     # End regular IRL trial
 
     return muE, muE_hold, df_irl, weights, t_hold
 
 
-def run_experiment_target_domain(exp_info, weights, t_hold):
+def run_trial_target_domain(exp_info, weights, t_hold):
     """
     Runs 1 trial to learn a policy in a new domain using weights learned from
     another domain.
@@ -892,12 +1092,12 @@ def run_experiment_target_domain(exp_info, weights, t_hold):
     for i, o in enumerate(obj_set_cols):
         best_idx = np.argmin(t_hold)
         source_best_w[i] = weights[best_idx][i]
-        # source_best_w[i] = exp_df.loc[exp_df['muL_hold_err_l2norm'].argmin()][w_idx]
 
-    ##
     # Read in target domain dataset
-    ##
-    X, y, feature_types = generate_dataset(exp_info['TARGET_DATASET'], n_samples=exp_info['N_DATASET_SAMPLES'])
+    X, y, feature_types = generate_dataset(
+        exp_info['TARGET_DATASET'],
+        n_samples=exp_info['N_DATASET_SAMPLES'],
+    )
 
     x_cols = (
         feature_types['boolean']
@@ -906,62 +1106,16 @@ def run_experiment_target_domain(exp_info, weights, t_hold):
     )
     x_cols.remove('z')
 
+    # These are the feature type sthat will be used as inputs for the expert
+    # classifier.
     expert_demo_feature_types = feature_types
-    irl_loop_feature_types = feature_types
 
     # These are the feature types that will be used in the classifier that will
     # predict `y` given `X` when learning the optimal policy for a given reward
     # function.
-    pipe = sklearn_clf_pipeline(
-        feature_types=expert_demo_feature_types,
-    #     clf_inst=RandomForestClassifier(),  # For some resaon, using a RF here prevents the ThresholdOptimizer from obtaining a decent value on Demographic Parity
-        clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-    )
-    dem_par_clf = ThresholdOptimizer(
-        estimator=pipe,
-        constraints='demographic_parity',
-        # objective='selection_rate',
-        predict_method="predict",
-        prefit=False,
-    )
-    dem_par_reduction = ReductionWrapper(
-        clf=dem_par_clf,
-        sensitive_features='z',
-    )
-    pipe = sklearn_clf_pipeline(
-        feature_types=expert_demo_feature_types,
-        # clf_inst=RandomForestClassifier(),  # For some resaon, using a RF here prevents the ThresholdOptimizer from obtaining a decent value on Demographic Parity
-        clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-    )
-    eq_opp_clf = ThresholdOptimizer(
-        estimator=pipe,
-        constraints='true_positive_rate_parity',
-        predict_method="predict",
-        prefit=False,
-    )
-    eq_opp_reduction = ReductionWrapper(
-        clf=eq_opp_clf,
-        sensitive_features='z',
-    )
-    pred_eq_clf = ThresholdOptimizer(
-        estimator=pipe,
-        constraints='false_negative_rate_parity',
-        predict_method="predict",
-        prefit=False,
-    )
-    pred_eq_reduction = ReductionWrapper(
-        clf=pred_eq_clf,
-        sensitive_features='z',
-    )
+    irl_loop_feature_types = feature_types
 
-    EXPERT_ALGO_LOOKUP = {
-        'OptAcc': sklearn_clf_pipeline(expert_demo_feature_types, RandomForestClassifier()),
-        'OptAccDecTree': sklearn_clf_pipeline(expert_demo_feature_types, clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4)),
-        # 'pos_pred_to_female_only': ManualClassifier(lambda row: int(row['sex'] == 'Female')),
-        'HardtDemPar': dem_par_reduction,
-        'HardtEqOpp': eq_opp_reduction,
-        'PredEq': pred_eq_reduction,
-    }
+    expert_algo_lookup = generate_expert_algo_lookup(expert_demo_feature_types)
 
     ##
     # Split data into 3 sets.
@@ -972,16 +1126,18 @@ def run_experiment_target_domain(exp_info, weights, t_hold):
     #.       never shown to the IRL learning algo.)
     ##
     X_demo, X_hold, y_demo, y_hold = train_test_split(X, y, test_size=.5)
-    X_train, X_test, y_train, y_test = train_test_split(X_demo, y_demo, test_size=.5)
-    del X_demo, y_demo # Make sure I don't acidentally use these variables later on
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_demo,
+        y_demo,
+        test_size=.5,
+    )
+    del X_demo, y_demo # Make sure I don't acidentally use these vars later on
 
-    ##
     # Generate expert demonstrations to compare against.
-    ##
     muE_target, demosE_target = generate_demos_k_folds(
         X=X_test,
         y=y_test,
-        clf=EXPERT_ALGO_LOOKUP[exp_info['EXPERT_ALGO']],
+        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
         obj_set=obj_set,
         n_demos=exp_info['N_EXPERT_DEMOS'],
     )
@@ -999,7 +1155,9 @@ def run_experiment_target_domain(exp_info, weights, t_hold):
     clf.fit(X_train, y_train)
 
     # Learn a policy that maximizes the reward function.
-    reward_weights = { obj.name: source_best_w[j] for j, obj in enumerate(obj_set.objectives) }
+    reward_weights = {
+        obj.name: source_best_w[j] for j, obj in enumerate(obj_set.objectives)
+    }
     test_df = pd.DataFrame(X_test)
     test_df['y'] = y_test
     clf_pol = compute_optimal_policy(
@@ -1015,12 +1173,8 @@ def run_experiment_target_domain(exp_info, weights, t_hold):
     # Compute feature expectations of the learned policy
     demo = generate_demo(clf_pol, X_test, y_test, can_observe_y=CAN_OBSERVE_Y)
     demo_hold = generate_demo(clf_pol, X_hold, y_hold, can_observe_y=False)
-    # demo_history.append(demo)
-    # demo_hold_history.append(demo_hold)
     muL_target = obj_set.compute_demo_feature_exp(demo)
     muL_target_hold = obj_set.compute_demo_feature_exp(demo_hold)
-    # mu_history.append(muj)
-    # mu_hold_history.append(muj_hold)
     logging.info(f"target domain muL = {np.round(muL_target, 3)}")
     logging.info(f"target domain muE = {np.round(muE_target.mean(axis=0), 3)}")
     logging.info(f"target domain muL_hold = {np.round(muL_target_hold, 3)}")
@@ -1066,14 +1220,16 @@ def run_experiment(exp_info):
         logging.info(f"\n\nTRIAL {trial_i}\n")
 
         # Run trials to learn weights on source domain
-        muE, muE_hold, df_irl, weights, t_hold = run_trial_source_domain(exp_info)
+        muE, muE_hold, df_irl, weights, t_hold = run_trial_source_domain(
+            exp_info,
+        )
 
         # Learn clf in target domain using weights learned in source domain
         muE_target_mean = None
         muL_target_hold = None
 
         if exp_info['TARGET_DATASET'] is not None:
-            muE_target, muL_target_hold = run_experiment_target_domain(
+            muE_target, muL_target_hold = run_trial_target_domain(
                 exp_info,
                 weights,
                 t_hold,
@@ -1096,7 +1252,10 @@ def run_experiment(exp_info):
     # Persist trial results
     exp_df = generate_single_exp_results_df(obj_set, results)
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    exp_df.to_csv(f"./../../data/experiment_output/fair_irl/exp_results/{timestamp}.csv", index=None)
+    exp_df.to_csv(
+        f"./../../data/experiment_output/fair_irl/exp_results/{timestamp}.csv",
+        index=None,
+    )
 
     # Persist trial info
     exp_info['timestamp'] = timestamp
@@ -1113,7 +1272,11 @@ def plot_results_source_domain_only(
     w_noise_factor=0,
     mu_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
     w_hue_order=[None, 'wL (FairIRL)', 'wL (FairIRLFO)'],
-    irl_methods_to_exclude=['FairIRLDeNormed', 'FairIRLFODeNormed', 'FairIRLNorm2'],
+    irl_methods_to_exclude=[
+        'FairIRLDeNormed',
+        'FairIRLFODeNormed',
+        'FairIRLNorm2',
+    ],
     extra_skip_conditions=(lambda info: False),
     extra_title=None,
     min_exp_timestamp=None,
@@ -1143,7 +1306,10 @@ def plot_results_source_domain_only(
         if max_exp_timestamp is not None and info_file > max_exp_timestamp:
             continue
 
-        result = pd.read_csv(f"{path_prefix}/exp_results/{result_file}", index_col=None)
+        result = pd.read_csv(
+            f"{path_prefix}/exp_results/{result_file}",
+            index_col=None,
+        )
         info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
 
         # Filter to only experiments for the input `expert_algo`
@@ -1159,10 +1325,22 @@ def plot_results_source_domain_only(
         for idx, row in result.iterrows():
             # Append muE and muL results
             for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([row[f"muE_hold_{obj_name}_mean"], 'muE', obj_name])
+                mu_rows.append([
+                    row[f"muE_hold_{obj_name}_mean"],
+                    'muE',
+                    obj_name,
+                ])
             for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([row[f"muL_best_hold_{obj_name}"], f"muL ({info['IRL_METHOD']})", obj_name])
-                w_rows.append([row[f"wL_{obj_name}"], f"wL ({info['IRL_METHOD']})", obj_name])
+                mu_rows.append([
+                    row[f"muL_best_hold_{obj_name}"],
+                    f"muL ({info['IRL_METHOD']})",
+                    obj_name,
+                ])
+                w_rows.append([
+                    row[f"wL_{obj_name}"],
+                    f"wL ({info['IRL_METHOD']})",
+                    obj_name,
+                ])
 
     if len(mu_rows) == 0:
         raise ValueError(f"No experimets with EXPERT_ALGO={expert_algo}")
@@ -1173,16 +1351,27 @@ def plot_results_source_domain_only(
     w_df = pd.DataFrame(w_rows, columns=w_cols)
     w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
 
-    mu_df['Demo Producer'] = mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E$')
-    mu_df['Demo Producer'] = mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
-    w_df['IRL Method'] = w_df['IRL Method'].str.replace('wL', r'$w^L$')
+    mu_df['Demo Producer'] = (
+        mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E$')
+    )
+    mu_df['Demo Producer'] = (
+        mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+    )
+    w_df['IRL Method'] = (
+        w_df['IRL Method'].str.replace('wL', r'$w^L$')
+    )
 
     mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E$')
     mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
     w_hue_order = pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
 
     # Plot boxplot for feature expectations
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5, 8.5), height_ratios=[2,1.33])
+    fig, (ax1, ax2) = plt.subplots(
+        2,
+        1,
+        figsize=(5, 8.5),
+        height_ratios=[2,1.33],
+    )
     sns.boxplot(
         x=mu_df['Feature Expectation'],
         y=mu_df['Value'],
@@ -1254,7 +1443,11 @@ def plot_results_target_domain(
         # 'wL (FairIRLNorm)',
         # 'wL (FairIRLNorm2)'
     ],
-    irl_methods_to_exclude=['FairIRLDeNormed', 'FairIRLFODeNormed', 'FairIRLNorm2'],
+    irl_methods_to_exclude=[
+        'FairIRLDeNormed',
+        'FairIRLFODeNormed',
+        'FairIRLNorm2',
+    ],
     extra_skip_conditions=(lambda info: False),
     min_exp_timestamp=None,
     max_exp_timestamp=None,
@@ -1283,7 +1476,10 @@ def plot_results_target_domain(
         if max_exp_timestamp is not None and info_file > max_exp_timestamp:
             continue
 
-        result = pd.read_csv(f"{path_prefix}/exp_results/{result_file}", index_col=None)
+        result = pd.read_csv(
+            f"{path_prefix}/exp_results/{result_file}",
+            index_col=None,
+        )
         info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
 
         # Filter to only experiments for the input `expert_algo`
@@ -1300,13 +1496,33 @@ def plot_results_target_domain(
         for idx, row in result.iterrows():
             # Append muE and muL results
             for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([row[f"muE_hold_{obj_name}_mean"], 'muE', obj_name])
+                mu_rows.append([
+                    row[f"muE_hold_{obj_name}_mean"],
+                    'muE',
+                    obj_name,
+                ])
                 if f"muE_target_{obj_name}" in row:
-                    mu_rows.append([row[f"muE_target_{obj_name}"], 'muE_target', obj_name])
-                    mu_rows.append([row[f"muL_target_hold_{obj_name}"], 'muL_target' + ' ' + info['IRL_METHOD'], obj_name])
+                    mu_rows.append([
+                        row[f"muE_target_{obj_name}"],
+                        'muE_target',
+                        obj_name,
+                    ])
+                    mu_rows.append([
+                        row[f"muL_target_hold_{obj_name}"],
+                        'muL_target' + ' ' + info['IRL_METHOD'],
+                        obj_name,
+                    ])
             for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([row[f"muL_best_hold_{obj_name}"], f"muL ({info['IRL_METHOD']})", obj_name])
-                w_rows.append([row[f"wL_{obj_name}"], f"wL ({info['IRL_METHOD']})", obj_name])
+                mu_rows.append([
+                    row[f"muL_best_hold_{obj_name}"],
+                    f"muL ({info['IRL_METHOD']})",
+                    obj_name,
+                ])
+                w_rows.append([
+                    row[f"wL_{obj_name}"],
+                    f"wL ({info['IRL_METHOD']})",
+                    obj_name,
+                ])
 
     if len(mu_rows) == 0:
         raise ValueError(f"No experimets with EXPERT_ALGO={expert_algo}")
@@ -1322,22 +1538,47 @@ def plot_results_target_domain(
 
     w_df = pd.DataFrame(w_rows, columns=w_cols)
     w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
-    mu_df['Demo Producer'] = mu_df['Demo Producer'].str.replace('muE_target', r'$\\mu^E_{TARGET}$')
-    mu_df['Demo Producer'] = mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E_{SOURCE}$')
-    mu_df['Demo Producer'] = mu_df['Demo Producer'].str.replace('muL_target', r'$\\mu^L_{TARGET}$')
-    mu_df['Demo Producer'] = mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
-    mu_hue_order = pd.Series(mu_hue_order).str.replace('muE_target', r'$\\mu^E_{TARGET}$')
-    mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E_{SOURCE}$')
-    mu_hue_order = pd.Series(mu_hue_order).str.replace('muL_target', r'$\\mu^L_{TARGET}$')
-    mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
-    w_df['IRL Method'] = w_df['IRL Method'].str.replace('wL', r'$w^L$')
-    w_hue_order = pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
+    mu_df['Demo Producer'] = (
+        mu_df['Demo Producer'].str.replace('muE_target', r'$\\mu^E_{TARGET}$')
+    )
+    mu_df['Demo Producer'] = (
+        mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E_{SOURCE}$')
+    )
+    mu_df['Demo Producer'] = (
+        mu_df['Demo Producer'].str.replace('muL_target', r'$\\mu^L_{TARGET}$')
+    )
+    mu_df['Demo Producer'] = (
+        mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+    )
+    mu_hue_order = (
+        pd.Series(mu_hue_order).str.replace('muE_target', r'$\\mu^E_{TARGET}$')
+    )
+    mu_hue_order = (
+        pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E_{SOURCE}$')
+    )
+    mu_hue_order = (
+        pd.Series(mu_hue_order).str.replace('muL_target', r'$\\mu^L_{TARGET}$')
+    )
+    mu_hue_order = (
+        pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
+    )
+    w_df['IRL Method'] = (
+        w_df['IRL Method'].str.replace('wL', r'$w^L$')
+    )
+    w_hue_order = (
+        pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
+    )
 
     mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
     w_df = w_df.sort_values(['Weight', 'IRL Method'])
 
     # Plot boxplot for feature expectations
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5, 8.5), height_ratios=[2,1.33])
+    fig, (ax1, ax2) = plt.subplots(
+        2,
+        1,
+        figsize=(5, 8.5),
+        height_ratios=[2,1.33],
+    )
     sns.boxplot(
         x=mu_df['Feature Expectation'],
         y=mu_df['Value'],
