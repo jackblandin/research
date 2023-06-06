@@ -742,8 +742,8 @@ def run_trial_source_domain(exp_info):
         y_irl_learn = pd.concat([y_irl_learn, y_irl_learn_i], axis=0)
 
         # Compute error of the learned policy: t[i] = wT(muE-mu[j])
-        ti, best_j, mu_delta, mu_delta_l2norm = irl_error(wi, muE, mu_history)
-        ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(wi, muE_hold, mu_hold_history)
+        ti, best_j, mu_delta, mu_delta_l2norm = irl_error(wi, muE, mu_history, norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'])
+        ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(wi, muE_hold, mu_hold_history, norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'])
         mu_best_history.append(mu_history[best_j])
         mu_best_hold_history.append(mu_hold_history[best_j])
         t.append(ti)
@@ -1255,6 +1255,7 @@ def plot_results_target_domain(
         # 'wL (FairIRLNorm2)'
     ],
     irl_methods_to_exclude=['FairIRLDeNormed', 'FairIRLFODeNormed', 'FairIRLNorm2'],
+    extra_skip_conditions=(lambda info: False),
     min_exp_timestamp=None,
     max_exp_timestamp=None,
 ):
@@ -1292,6 +1293,7 @@ def plot_results_target_domain(
             or info['TARGET_DATASET'] != target_dataset
             or set(info['OBJECTIVE_NAMES']) != set(objective_set_names)
             or info['IRL_METHOD'] in irl_methods_to_exclude
+            or extra_skip_conditions(info)
         ):
             continue
 

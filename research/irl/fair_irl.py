@@ -198,7 +198,7 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
     return mu, demos
 
 
-def irl_error(w, muE, muL):
+def irl_error(w, muE, muL, norm_weights=False):
     """
     Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
 
@@ -210,6 +210,8 @@ def irl_error(w, muE, muL):
         Array of all expert feature expectations.
     muL : array-like<array-like<float>>
         List of all learned feature expectations.
+    norm_weights : bool, default False
+        If true, divides the error by the l2 norm of the weights.
 
     Returns
     -------
@@ -230,12 +232,10 @@ def irl_error(w, muE, muL):
     # Find best muj
     for j, muj in enumerate(muL):
         mu_deltas[j] = muE.mean(axis=0) - muj
-        # l2_mu_deltas[j] = np.linalg.norm(mu_deltas[j])
-        # l2_w = np.linalg.norm(w)
-        # err = l2_w * l2_mu_deltas[j]
-        # # NOTE: 05/20/2023 – Added this to see if it fixes issue where lower weights are preferred
         err = np.linalg.norm(w * mu_deltas[j])
-        # err = err / l2_w
+        if norm_weights:
+            l2_w = np.linalg.norm(w)
+            err = err / l2_w
         if err < best_err:
             best_err = err
             best_j = j
@@ -300,155 +300,3 @@ def sklearn_clf_pipeline(feature_types, clf_inst):
         ],
     )
     return pipe
-
-
-def generate_all_exp_results_df(obj_set, n_trials, data_demo, exp_algo, irl_method):
-    """
-    Generate dataframe for experiment parameters and results
-
-    Parameters
-    ----------
-    obj_set : ObjectiveSet
-        The objective set.
-    n_trials : int
-        Number of experiment trials to run.
-    data_demo : str
-        The name of the dataset used to generate expert demonstrations.
-    exp_algo : str
-        The name of the algorithm used to train the expert demonstrator.
-    irl_method : str
-        The name of the IRL algorithm used to recover the rewards.
-
-    Returns
-    -------
-    all_exp_df : pandas.DataFrame
-        A dataframe with relevant columns, but no data.
-    """
-    all_exp_df_cols=['n_trials', 'data_demo', 'exp_algo', 'irl_method']
-
-    for obj in obj_set.objectives:
-        all_exp_df_cols.append(f"muE_{obj.name}_mean")
-        all_exp_df_cols.append(f"muE_{obj.name}_std")
-
-    for obj in obj_set.objectives:
-        all_exp_df_cols.append(f"wL_{obj.name}_mean")
-        all_exp_df_cols.append(f"wL_{obj.name}_std")
-
-    for obj in obj_set.objectives:
-        all_exp_df_cols.append(f"muL_err_{obj.name}_mean")
-        all_exp_df_cols.append(f"muL_err_{obj.name}_std")
-
-    all_exp_df_cols.append('muL_err_l2norm_mean')
-    all_exp_df_cols.append('muL_err_l2norm_std')
-
-    all_exp_df = pd.DataFrame(columns=all_exp_df_cols)
-
-    all_exp_df.loc[0, 'n_trials'] = n_trials
-    all_exp_df.loc[0, 'data_demo'] = 'Adult'
-    all_exp_df.loc[0, 'exp_algo'] = exp_algo
-    all_exp_df.loc[0, 'irl_method'] = 'IRL_METHOD'
-
-    return all_exp_df
-
-
-def generate_single_exp_results_df(obj_set, results):
-    """
-    Generate dataframe for a single experiment. Keeps track of the results of
-    the best learned policy.
-
-    Parameters
-    ----------
-    obj_set : ObjectiveSet
-        The objective set.
-    data : list<list>
-        The results.
-    results : pandas.DataFrame
-        A dataframe with relevant weight, feat exp, and error columns for the
-        best learned policy. Each row is produced by the `new_trial_result()`
-        method.
-    """
-    exp_df_cols = []
-
-    for obj in obj_set.objectives:
-        exp_df_cols.append(f"muE_{obj.name}_mean")
-        exp_df_cols.append(f"muE_{obj.name}_std")
-
-    for obj in obj_set.objectives:
-        exp_df_cols.append(f"muE_hold_{obj.name}_mean")
-        exp_df_cols.append(f"muE_hold_{obj.name}_std")
-
-    for obj in obj_set.objectives:
-        exp_df_cols.append(f"wL_{obj.name}")
-
-    for obj in obj_set.objectives:
-        exp_df_cols.append(f"muL_{obj.name}")
-        exp_df_cols.append(f"muL_best_{obj.name}")
-        exp_df_cols.append(f"muL_hold_{obj.name}")
-        exp_df_cols.append(f"muL_best_hold_{obj.name}")
-
-    for obj in obj_set.objectives:
-        exp_df_cols.append(f"muL_err_{obj.name}")
-        exp_df_cols.append(f"muL_hold_err_{obj.name}")
-
-    exp_df_cols.append('muL_err_l2norm')
-    exp_df_cols.append('muL_hold_err_l2norm')
-
-    for obj in obj_set.objectives:
-        exp_df_cols.append(f"muE_target_{obj.name}")
-        exp_df_cols.append(f"muL_target_hold_{obj.name}")
-
-    exp_df = pd.DataFrame(results, columns=exp_df_cols)
-
-    return exp_df
-
-def new_trial_result(obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target_hold=None):
-    result = []
-
-    for i, obj in enumerate(obj_set.objectives):
-        muE_mean = np.mean(muE[:, i])
-        muE_std = np.std(muE[:, i])
-        result += [muE_mean, muE_std]
-
-    for i, obj in enumerate(obj_set.objectives):
-        muE_hold_mean = np.mean(muE_hold[:, i])
-        muE_hold_std = np.std(muE_hold[:, i])
-        result += [muE_hold_mean, muE_hold_std]
-
-    best_t = (
-        df_irl.query('(is_expert == 0) and (is_init_policy == 0)')
-        .sort_values('t')
-        ['t'].values[0]
-    )
-    best_idx = (
-        df_irl.query('(is_expert == 0) and (is_init_policy == 0) and abs(t - @best_t) <= .0001')
-        .sort_index()
-        .index[0]
-    )
-
-    best_row = df_irl.loc[best_idx]
-
-    for i, obj in enumerate(obj_set.objectives):
-        result.append(best_row[f"{obj.name}_weight"])
-
-    for obj in obj_set.objectives:
-        result.append(best_row[f"{obj.name}"])
-        result.append(best_row[f"muL_best_{obj.name}"])
-        result.append(best_row[f"muL_hold_{obj.name}"])
-        result.append(best_row[f"muL_best_hold_{obj.name}"])
-
-    for i, obj in enumerate(obj_set.objectives):
-        _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE_hold[:, i]))
-        _muL_hold_err = abs(best_row[f"muL_hold_{obj.name}"] - np.mean(muE_hold[:, i]))
-        result.append(_muL_err)
-        result.append(_muL_hold_err)
-
-    result.append(best_row['mu_delta_l2norm'])
-    result.append(best_row['mu_delta_l2norm_hold'])
-
-    for i, obj in enumerate(obj_set.objectives):
-        result.append(muE_target[i])
-        result.append(muL_target_hold[i])
-
-    return result
-
-
