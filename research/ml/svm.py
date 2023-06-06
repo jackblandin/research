@@ -3,9 +3,10 @@ import numpy as np
 import seaborn as sns  # noqa
 from scipy import optimize
 from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.preprocessing import normalize
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
-from tabulate import tabulate
+# from tabulate import tabulate
 
 from research.ml.kernel import KERNEL_MAP
 
@@ -15,7 +16,7 @@ class SVM(BaseEstimator, ClassifierMixin):
 
     Parameters
     ----------
-    kernel : str or function
+    kernel : str or function, default 'linear'
         Kernel function.
         If str, must be 'gaussian', 'linear', 'polynomial', 'sigmoid', 'tanh'.
         If function, format is function(x, y) -> float
@@ -26,6 +27,8 @@ class SVM(BaseEstimator, ClassifierMixin):
     ----------
     opt_result_ : scipy.optimize.optimize.OptimizeResult
         Optimization result.
+    sup_idx_ : array-like<int>, len(n_support_vectors)
+        Indices of the support vectors.
     sup_X_ : np.ndarray, shape(n_support_vectors, m)
         X values that are support vectors.
     sup_y_ : np.array, shape(n_support_vectors)
@@ -100,6 +103,10 @@ class SVM(BaseEstimator, ClassifierMixin):
         Returns
         -------
         """
+        # Don't mess with teh original copies.
+        X = X.copy()
+        y = y.copy()
+
         # My Input validation
         if self.kernel.name != 'linear' and vectorized:
             msg = 'Vectorized loss only works with linear kernel right now.'
@@ -150,17 +157,44 @@ class SVM(BaseEstimator, ClassifierMixin):
                                              constraints=(con1, con2),
                                              args=(X, y))
         # Find indices of support vectors
-        sv_idx = np.where(self.opt_result_.x > 0.001)
-        self.sup_X_ = X[sv_idx]
-        self.sup_y_ = y[sv_idx]
-        self.sup_alphas_ = self.opt_result_.x[sv_idx]
+        sup_idx = np.where(self.opt_result_.x > 0.001)
+        self.sup_idx_ = sup_idx
+        self.sup_X_ = X[sup_idx]
+        self.sup_y_ = y[sup_idx]
+        self.sup_alphas_ = self.opt_result_.x[sup_idx]
 
         self.offset_ = self._compute_offset()
 
         return self
 
-    def predict(self, X):
+    def predict(self, X, threshold=0):
         """Predicts classes for each row of input X.
+
+        Parameters
+        ----------
+        X : np.ndarray, shape (-1, n)
+            Input.
+        threshold : float, range [-1, 1)
+            If discriminant is greater than or equal to threshold, predict one,
+            otherwise predict zero.
+
+        Returns
+        -------
+        np.array<int>, shape (X.shape[0])
+            Predicted target (0 or 1) values.
+        """
+        check_is_fitted(self, ['opt_result_', 'sup_idx_', 'sup_X_', 'sup_y_',
+                               'sup_alphas_', 'offset_'])
+        X = check_array(X)
+
+        g = self._compute_discriminant(X)
+
+        yhat = (g >= 0).astype(int)
+
+        return yhat
+
+    def predict_proba(self, X):
+        """Predicts probabilities by computing the discriminants.
 
         Parameters
         ----------
@@ -169,18 +203,41 @@ class SVM(BaseEstimator, ClassifierMixin):
 
         Returns
         -------
-        np.array<int>, shape (X.shape[0])
-            Predicted target (0 or 1) values.
+        np.array<float>, range [0,1], shape (X.shape[0])
+            Predicted probability (discriminant normalized betwen zero and
+            one).
         """
-        check_is_fitted(self, ['opt_result_', 'sup_X_', 'sup_y_',
+        check_is_fitted(self, ['opt_result_', 'sup_idx_', 'sup_X_', 'sup_y_',
                                'sup_alphas_', 'offset_'])
         X = check_array(X)
 
         g = self._compute_discriminant(X)
 
-        yhat = (g > .5).astype(int)
+        prob = (g + 1) / 2
 
-        return yhat
+        return prob
+
+    def weights(self):
+        """
+        Computes the weights for each input feature. Used in IRL to infer the
+        feature expectation weights. Requires that the model be fitted.
+
+        Returns
+        -------
+        weights : np.array<float>, len(n_features)
+        """
+        check_is_fitted(self, ['opt_result_', 'sup_idx_', 'sup_X_', 'sup_y_',
+                               'sup_alphas_', 'offset_'])
+        sup_X_ = np.array(self.sup_X_)
+        for i in range(len(self.sup_y_)):
+            sup_X_[i] *= self.sup_y_[i]
+
+        weights = np.dot(self.sup_alphas_.T, sup_X_)
+
+        # Normalize the weights
+        weights = normalize([weights], norm='l1')[0]
+
+        return weights
 
     def plot_decision_boundary(self, X, y):
         """Plots H, H+, H-, as well as support vectors.

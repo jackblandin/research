@@ -1,7 +1,8 @@
 .ipynb_checkpoints/
 *.pyc
 experiments/**/logs/*
-*/**/data/**/*.csv
+experiments/**/resources/*
+*/**/data/**/*
 dist/
 *egg-info/
 *.DS_Store

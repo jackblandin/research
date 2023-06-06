@@ -1,7 +1,7 @@
 # Research
 
 ## Description
-Various implementations of existing machine learning and reinforcement learning algorithms. These algorithms are meant for personal instructive purposes rather and should never be used in a production setting.
+Various implementations of existing machine learning and reinforcement learning algorithms. These algorithms are meant for personal instructive purposes and should not be used in a production setting.
 
 ## Setup
 

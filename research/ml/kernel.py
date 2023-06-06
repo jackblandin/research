@@ -71,9 +71,8 @@ class GaussianKernel(Kernel):
 class LinearKernel(Kernel):
     """Linear kernel: <xi,xj>"""
 
-    def __init__(self, pairwise):
+    def __init__(self):
         self.name = 'linear'
-        self.pairwise = pairwise
         pass
 
     def transform(self, xi, xj):

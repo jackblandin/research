@@ -45,7 +45,7 @@ def play_episode(env, model, eps):
     return totalreward
 
 
-def play_n_episodes(env, model, n, use_eps=True):
+def play_n_episodes(env, model, n, use_eps=True, show_plots=True):
     totalrewards = np.zeros(n)
 
     if n > 10:
@@ -76,11 +76,14 @@ def play_n_episodes(env, model, n, use_eps=True):
     print('Avg reward for last {:,} episodes: {:,.3f}'.format(
         window, totalrewards[int(-1*(n/10)):].mean()))
 
-    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(16, 5))
-    ax0.plot(totalrewards)
-    ax0.set_title("Rewards")
-    _plot_running_avg(ax1, totalrewards, window)
-    return ax0, ax1
+    if show_plots:
+        fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(16, 5))
+        ax0.plot(totalrewards)
+        ax0.set_title("Rewards")
+        _plot_running_avg(ax1, totalrewards, window)
+        return ax0, ax1
+    else:
+        return None, None
 
 
 def _running_avg(totalrewards, t, window):
