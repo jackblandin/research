@@ -329,6 +329,164 @@ class ReductionWrapper():
         )
 
 
+def generate_all_exp_results_df(obj_set, n_trials, data_demo, exp_algo, irl_method):
+    """
+    Generate dataframe for experiment parameters and results
+
+    Parameters
+    ----------
+    obj_set : ObjectiveSet
+        The objective set.
+    n_trials : int
+        Number of experiment trials to run.
+    data_demo : str
+        The name of the dataset used to generate expert demonstrations.
+    exp_algo : str
+        The name of the algorithm used to train the expert demonstrator.
+    irl_method : str
+        The name of the IRL algorithm used to recover the rewards.
+
+    Returns
+    -------
+    all_exp_df : pandas.DataFrame
+        A dataframe with relevant columns, but no data.
+    """
+    all_exp_df_cols=['n_trials', 'data_demo', 'exp_algo', 'irl_method']
+
+    for obj in obj_set.objectives:
+        all_exp_df_cols.append(f"muE_{obj.name}_mean")
+        all_exp_df_cols.append(f"muE_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        all_exp_df_cols.append(f"wL_{obj.name}_mean")
+        all_exp_df_cols.append(f"wL_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        all_exp_df_cols.append(f"muL_err_{obj.name}_mean")
+        all_exp_df_cols.append(f"muL_err_{obj.name}_std")
+
+    all_exp_df_cols.append('muL_err_l2norm_mean')
+    all_exp_df_cols.append('muL_err_l2norm_std')
+
+    all_exp_df = pd.DataFrame(columns=all_exp_df_cols)
+
+    all_exp_df.loc[0, 'n_trials'] = n_trials
+    all_exp_df.loc[0, 'data_demo'] = 'Adult'
+    all_exp_df.loc[0, 'exp_algo'] = exp_algo
+    all_exp_df.loc[0, 'irl_method'] = 'IRL_METHOD'
+
+    return all_exp_df
+
+
+def generate_single_exp_results_df(obj_set, results):
+    """
+    Generate dataframe for a single experiment. Keeps track of the results of
+    the best learned policy.
+
+    Parameters
+    ----------
+    obj_set : ObjectiveSet
+        The objective set.
+    data : list<list>
+        The results.
+    results : pandas.DataFrame
+        A dataframe with relevant weight, feat exp, and error columns for the
+        best learned policy. Each row is produced by the `new_trial_result()`
+        method.
+    """
+    exp_df_cols = []
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muE_{obj.name}_mean")
+        exp_df_cols.append(f"muE_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muE_hold_{obj.name}_mean")
+        exp_df_cols.append(f"muE_hold_{obj.name}_std")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"wL_{obj.name}")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muL_{obj.name}")
+        exp_df_cols.append(f"muL_best_{obj.name}")
+        exp_df_cols.append(f"muL_hold_{obj.name}")
+        exp_df_cols.append(f"muL_best_hold_{obj.name}")
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muL_err_{obj.name}")
+        exp_df_cols.append(f"muL_hold_err_{obj.name}")
+
+    exp_df_cols.append('muL_err_l2norm')
+    exp_df_cols.append('muL_hold_err_l2norm')
+
+    for obj in obj_set.objectives:
+        exp_df_cols.append(f"muE_target_{obj.name}")
+        exp_df_cols.append(f"muL_target_hold_{obj.name}")
+
+    exp_df = pd.DataFrame(results, columns=exp_df_cols)
+
+    return exp_df
+
+def new_trial_result(obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target_hold=None):
+    result = []
+
+    for i, obj in enumerate(obj_set.objectives):
+        muE_mean = np.mean(muE[:, i])
+        muE_std = np.std(muE[:, i])
+        result += [muE_mean, muE_std]
+
+    for i, obj in enumerate(obj_set.objectives):
+        muE_hold_mean = np.mean(muE_hold[:, i])
+        muE_hold_std = np.std(muE_hold[:, i])
+        result += [muE_hold_mean, muE_hold_std]
+
+    best_t = (
+        df_irl.query('(is_expert == 0) and (is_init_policy == 0)')
+        .sort_values('t')
+        ['t'].values[0]
+    )
+    best_idx = (
+        df_irl.query('(is_expert == 0) and (is_init_policy == 0) and abs(t - @best_t) <= .0001')
+        .sort_index()
+        .index[0]
+    )
+
+    best_row = df_irl.loc[best_idx]
+
+    for i, obj in enumerate(obj_set.objectives):
+        result.append(best_row[f"{obj.name}_weight"])
+
+    for obj in obj_set.objectives:
+        result.append(best_row[f"{obj.name}"])
+        result.append(best_row[f"muL_best_{obj.name}"])
+        result.append(best_row[f"muL_hold_{obj.name}"])
+        result.append(best_row[f"muL_best_hold_{obj.name}"])
+
+    for i, obj in enumerate(obj_set.objectives):
+        _muL_err = abs(best_row[f"{obj.name}"] - np.mean(muE_hold[:, i]))
+        _muL_hold_err = abs(best_row[f"muL_hold_{obj.name}"] - np.mean(muE_hold[:, i]))
+        result.append(_muL_err)
+        result.append(_muL_hold_err)
+
+    result.append(best_row['mu_delta_l2norm'])
+    result.append(best_row['mu_delta_l2norm_hold'])
+
+    for i, obj in enumerate(obj_set.objectives):
+
+        if muE_target is not None:
+            result.append(muE_target[i])
+        else:
+            result.append(np.nan)
+
+        if muL_target_hold is not None:
+            result.append(muL_target_hold[i])
+        else:
+            result.append(np.nan)
+
+    return result
+
+
 def run_trial_source_domain(exp_info):
     """
     Runs 1 trial to learn weights in the source domain.
@@ -351,9 +509,8 @@ def run_trial_source_domain(exp_info):
         items like learned weights, feature expectations, error, etc.
     weights : array-like<float>. Shape(n_irl_loop_iters,  n_objectives).
         The learned weights for each iteration of the IRL loop.
-    mu_delta_l2norm_hold_hist : array-like<float>. Shape(n_irl_loop_iters)
-        The l2 norm of the deltas between the expert and learned features
-        expectations on the holdout set.
+    t_hold : array-like<float>. Shape(n_irl_loop_iters)
+        The irl error on the holdout set.
     """
 
     # Initiate objectives
@@ -691,10 +848,10 @@ def run_trial_source_domain(exp_info):
 
     # End regular IRL trial
 
-    return muE, muE_hold, df_irl, weights, mu_delta_l2norm_hold_hist
+    return muE, muE_hold, df_irl, weights, t_hold
 
 
-def run_experiment_target_domain(exp_info, weights, mu_delta_l2norm_hold_hist):
+def run_experiment_target_domain(exp_info, weights, t_hold):
     """
     Runs 1 trial to learn a policy in a new domain using weights learned from
     another domain.
@@ -705,12 +862,9 @@ def run_experiment_target_domain(exp_info, weights, mu_delta_l2norm_hold_hist):
         Metadata about the experiment.
     weights : array-like<float>, shape (n_trials, n_objectives)
         The learned weights from the source domain.
-    mu_delta_l2norm_hold_hist : array-like<float>, len(n_trials)
-        The mu_delta l2 norm computations (error without factoring in weight)
-        from the source domain. Currently this is how we are selecting which
-        weights to use. We should instead use the weights that have the lowest
-        error according to normal IRL. I can't remember why doing this was
-        easier. but needs to be fixed.
+    t_hold : array-like<float>, len(n_trials)
+        The irl error histories. This is how we are selecting which weights to
+        in the target domain.
 
     Returns
     -------
@@ -736,7 +890,7 @@ def run_experiment_target_domain(exp_info, weights, mu_delta_l2norm_hold_hist):
     # Get the best weights from the source domain
     source_best_w = np.zeros(len(obj_set_cols))
     for i, o in enumerate(obj_set_cols):
-        best_idx = np.argmin(mu_delta_l2norm_hold_hist)
+        best_idx = np.argmin(t_hold)
         source_best_w[i] = weights[best_idx][i]
         # source_best_w[i] = exp_df.loc[exp_df['muL_hold_err_l2norm'].argmin()][w_idx]
 
@@ -912,25 +1066,30 @@ def run_experiment(exp_info):
         logging.info(f"\n\nTRIAL {trial_i}\n")
 
         # Run trials to learn weights on source domain
-        muE, muE_hold, df_irl, weights, mu_delta_l2norm_hold_hist = run_trial_source_domain(exp_info)
+        muE, muE_hold, df_irl, weights, t_hold = run_trial_source_domain(exp_info)
 
         # Learn clf in target domain using weights learned in source domain
-        muE_target = None
+        muE_target_mean = None
         muL_target_hold = None
 
         if exp_info['TARGET_DATASET'] is not None:
             muE_target, muL_target_hold = run_experiment_target_domain(
                 exp_info,
                 weights,
-                mu_delta_l2norm_hold_hist,
+                t_hold,
             )
+            muE_target_mean = muE_target.mean(axis=0)
 
         # Aggregate trial results
-        results.append(new_trial_result(
+        _result = new_trial_result(
             obj_set,
             muE,
             muE_hold,
-            df_irl, muE_target.mean(axis=0), muL_target_hold))
+            df_irl,
+            muE_target_mean,
+            muL_target_hold,
+        )
+        results.append(_result)
 
         trial_i += 1
 
@@ -957,6 +1116,8 @@ def plot_results_source_domain_only(
     irl_methods_to_exclude=['FairIRLDeNormed', 'FairIRLFODeNormed', 'FairIRLNorm2'],
     extra_skip_conditions=(lambda info: False),
     extra_title=None,
+    min_exp_timestamp=None,
+    max_exp_timestamp=None,
 ):
     # Construct a pivot table so we can do a seaborn boxplot
     mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
@@ -975,6 +1136,13 @@ def plot_results_source_domain_only(
                 f"Mismatched number of results and info files. "
                 f"{result_file}, {info_file}"
             )
+
+        # Filter out any unwanted experiments
+        if min_exp_timestamp is not None and info_file < min_exp_timestamp:
+            continue
+        if max_exp_timestamp is not None and info_file > max_exp_timestamp:
+            continue
+
         result = pd.read_csv(f"{path_prefix}/exp_results/{result_file}", index_col=None)
         info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
 
@@ -1087,6 +1255,8 @@ def plot_results_target_domain(
         # 'wL (FairIRLNorm2)'
     ],
     irl_methods_to_exclude=['FairIRLDeNormed', 'FairIRLFODeNormed', 'FairIRLNorm2'],
+    min_exp_timestamp=None,
+    max_exp_timestamp=None,
 ):
     # Construct a pivot table so we can do a seaborn boxplot
     mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
@@ -1105,6 +1275,13 @@ def plot_results_target_domain(
                 f"Mismatched number of results and info files. "
                 f"{result_file}, {info_file}"
             )
+
+        # Filter out any unwanted experiments
+        if min_exp_timestamp is not None and info_file < min_exp_timestamp:
+            continue
+        if max_exp_timestamp is not None and info_file > max_exp_timestamp:
+            continue
+
         result = pd.read_csv(f"{path_prefix}/exp_results/{result_file}", index_col=None)
         info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
 

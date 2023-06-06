@@ -230,14 +230,12 @@ def irl_error(w, muE, muL):
     # Find best muj
     for j, muj in enumerate(muL):
         mu_deltas[j] = muE.mean(axis=0) - muj
-        l2_mu_deltas[j] = np.linalg.norm(mu_deltas[j])
-        l2_w = np.linalg.norm(w)
-        err = l2_w * l2_mu_deltas[j]
+        # l2_mu_deltas[j] = np.linalg.norm(mu_deltas[j])
+        # l2_w = np.linalg.norm(w)
+        # err = l2_w * l2_mu_deltas[j]
         # # NOTE: 05/20/2023 – Added this to see if it fixes issue where lower weights are preferred
-        err = err / l2_w
-        # NOTE: 05/21/2023 - Replaced above with this since I think it's correct
-        # Nevermind. it doesn't do as well. Keeping above.
-        # err = np.linalg.norm(w * mu_deltas[j])
+        err = np.linalg.norm(w * mu_deltas[j])
+        # err = err / l2_w
         if err < best_err:
             best_err = err
             best_j = j
