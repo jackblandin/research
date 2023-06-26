@@ -3,19 +3,15 @@ import numpy as np
 import os
 import pandas as pd
 from research.rl.env.clf_mdp import *
+from research.rl.env.clf_mdp_policy import *
+from research.rl.env.objectives import *
 from research.utils import *
-from sklearn.compose import ColumnTransformer
-from sklearn.feature_selection import SelectPercentile, chi2
-from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split, KFold
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import KBinsDiscretizer, OneHotEncoder
-from sklearn.utils.validation import check_is_fitted
 
 
 def compute_optimal_policy(
     clf_df, clf, x_cols, obj_set, reward_weights, skip_error_terms=False,
-    method='highs', gamma = 1e-6,
+    method='highs', gamma = 1e-6, min_freq_fill_pct=0,
 ):
     """
     Learns the optimal policies from the provided reward weights.
@@ -52,10 +48,13 @@ def compute_optimal_policy(
         The MDP discount factor. Should be close to zero since this is a
         classification mdp, but cannot be zero exactly otherwise the linear
         program won't converge.
+    min_freq_fill_pct, float, range[0, 1), default 0
+        Minimum frequency for each input variable to not get replaced by a
+        default value.
 
     Returns
     -------
-    opt_pol : list<np.array<int>>
+    opt_pol : research.rl.env.clf_mdp.ClassificationMDPPolicy
         The optimal policy. If there are multiple, it randomly selects one.
     """
     clf_mdp = ClassificationMDP(
@@ -63,11 +62,14 @@ def compute_optimal_policy(
         obj_set=obj_set,
         x_cols=x_cols,
     )
+
     # Construct the mdp, including optimization problems
     clf_mdp.fit(
         reward_weights=reward_weights,
         clf_df=clf_df,
+        min_freq_fill_pct=min_freq_fill_pct,
     )
+
     # Compute the optimal policy(s). This does NOT fit the classifier that
     # predicts Y from Z, X. That occurs on the generate_demo() call. This
     # `compute_optimal_policies` computes the optimal policy, assuming the
@@ -76,6 +78,7 @@ def compute_optimal_policy(
         skip_error_terms=skip_error_terms,
         method=method,
     )
+
     # Pick from one of the policies (if there are multiple).
     sampled_policy = optimal_policies[np.random.choice(len(optimal_policies))]
 
@@ -84,6 +87,7 @@ def compute_optimal_policy(
         pi=sampled_policy,
         clf=clf,
     )
+
     return clf_pol
 
 
@@ -241,62 +245,3 @@ def irl_error(w, muE, muL, norm_weights=False):
             best_j = j
 
     return best_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]
-
-
-def sklearn_clf_pipeline(feature_types, clf_inst):
-    """
-    Utility method for constructing sklearn classifier pipeline, which in this
-    case corresponds to a demonstration (X, yhat, y). The input clf_inst
-    doesn't need to be a sklearn classifier, but does need to adhere to the
-    sklearn.base.BaseEstimator/ClassifierMixin paradigm.
-
-    Parameters
-    ----------
-    feature_types : dict<str, list>
-        Specifies which type of feature each column is; used for feature
-        engineering. Keys are feature types ('boolean', 'categoric',
-        'continuous', 'meta'). Values are lists of the columns with that
-        feature type.
-    clf_inst : sklearn.base.BaseEstimator, ClassifierMixin
-        Sklearn classifier instance. E.g. `RandomForestClassifier()`.
-
-    Returns
-    -------
-    pipe : sklearn.pipeilne.Pipeline
-        scikit-learn pipeline.
-    """
-    numeric_trf = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ('kbins', KBinsDiscretizer(
-                n_bins=3, encode='ordinal', strategy='uniform')),
-        ]
-    )
-    categoric_trf = Pipeline(
-        steps=[
-            ("encoder", OneHotEncoder(handle_unknown="ignore")),
-            ("selector", SelectPercentile(chi2, percentile=50)),
-        ]
-    )
-    transformers = []
-
-    if len(feature_types['continuous']) > 0:
-        transformers.append(("num", numeric_trf, feature_types['continuous']))
-
-    if len(feature_types['categoric']) > 0:
-        transformers.append(("cat", categoric_trf, feature_types['categoric']))
-
-    if len(feature_types['boolean']) > 0:
-        transformers.append(('bool', categoric_trf, feature_types['boolean']))
-
-    preprocessor = ColumnTransformer(
-        transformers=transformers,
-        sparse_threshold=.000001,
-    )
-    pipe = Pipeline(
-        steps=[
-            ("preprocessor", preprocessor),
-            ("classifier", clf_inst),
-        ],
-    )
-    return pipe

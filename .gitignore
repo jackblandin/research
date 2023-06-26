@@ -3,6 +3,8 @@
 experiments/**/logs/*
 experiments/**/resources/*
 */**/data/**/*
+*/**/experiment_output/**/*
+data/**/*
 dist/
 *egg-info/
 *.DS_Store

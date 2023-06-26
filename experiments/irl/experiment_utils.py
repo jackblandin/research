@@ -6,9 +6,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from imblearn.under_sampling import RandomUnderSampler
-from fairlearn.datasets import fetch_adult, fetch_boston
 from fairlearn.postprocessing import ThresholdOptimizer
+from research.rl.env.clf_mdp import *
+from research.rl.env.clf_mdp_policy import *
+from research.rl.env.objectives import *
 from research.irl.fair_irl import *
 from research.ml.svm import SVM
 from research.utils import *
@@ -16,6 +17,7 @@ from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.tree import DecisionTreeClassifier
+from .datasets import *
 
 
 # Color palette for plotting
@@ -29,310 +31,6 @@ OBJ_LOOKUP_BY_NAME = {
     'EqOpp': EqualOpportunityObjective,
     'PredPar': PredictiveEqualityObjective,
 }
-
-
-def generate_dataset(dataset_name, n_samples):
-    """
-    Helper method that returns a dataset based on the specified label.
-
-    Parameters
-    ----------
-    dataset_name : str
-        Name of the dataset.
-    n_samples : int
-        Number of samples to return from the dataset.
-
-    Returns
-    -------
-    X : pandas.DataFrame
-        The X (including z) columns.
-    y : pandas.Series
-        Just the y column.
-    feature_types : dict<str, array-like>
-        Mapping of column names to their type of feature. Used to when
-        constructing sklearn pipelines.
-    """
-    if dataset_name == 'Adult':
-        X, y, feature_types = generate_adult_dataset(n_samples)
-    elif dataset_name == 'COMPAS':
-        X, y, feature_types = generate_compas_dataset(n_samples)
-    elif dataset_name == 'Boston':
-        X, y, feature_types = generate_boston_housing_dataset(n_samples)
-    else:
-        raise ValueError(f"Unrecognized dataset name: {dataset_name}")
-
-    X = X[
-        feature_types['boolean']
-        + feature_types['categoric']
-        + feature_types['continuous']
-    ]
-
-    return X, y, feature_types
-
-
-def generate_adult_dataset(
-    n=10_000, z_col='is_race_white', y_col='is_income_over_50k',
-):
-    """
-    Wrapper function for generating a sample of the adult dataset. This
-    includes sampling down to just `n` samples, specifying the protected
-    attribute 'z',
-
-    Parameters
-    ---------
-    n : int, default 10_000
-        Number of records to sample from dataset.
-    z_col : str, default 'is_race_white'
-        The column to use as the protected attribute. Must be binary.
-    y_col : str, default 'is_income_over_50k'
-        The column to use as the target variable. Must be binary.
-
-    Returns
-    -------
-    X : pandas.DataFrame
-        The X (including z) columns.
-    y : pandas.Series
-        Just the y column.
-    feature_types : dict<str, array-like>
-        Mapping of column names to their type of feature. Used to when
-        constructing sklearn pipelines.
-    """
-    data = fetch_adult(as_frame=True)
-    df = data.data.copy()
-    df['income'] = data.target.copy()
-
-    # Take sample if possible
-    if n < len(df):
-        df = df.sample(n)
-
-    # Common transformations
-    df['is_income_over_50k'] = df['income'] == '>50K'
-    df['is_race_white'] = df['race'] == 'White'
-
-    # Specify the target variable `y`
-    df['y'] = df[y_col].astype(int)
-
-    # Specify the protected attribute `z`
-    df['z'] = df[z_col].astype(int)
-
-    # Display useful summary debug on z and y
-    logging.debug('Dataset count of each z, y group')
-    logging.debug(
-        df_to_log(
-            df.groupby(['z'])[['y']].agg(['count', 'mean'])
-      )
-    )
-
-    # Split into inputs and target variables
-    y = df['y']
-    X = df.copy().drop(columns=['y', y_col, z_col, 'income'])
-
-    # NOTE: 05/20/2023
-    # Resampling messes up the feature expectations. Don't do this if you're
-    # doing IRL.
-    #
-    # Balance the positive and negative classes
-    # rus = RandomUnderSampler(sampling_strategy=.5)
-    # X, y = rus.fit_resample(X, y)
-    feature_types = {
-        'boolean': [
-            'z',
-        ],
-        'categoric': [
-            'workclass',
-            'education',
-            # 'marital-status',
-            # 'occupation',
-            # 'relationship',
-            # 'native-country',
-            # 'race',
-              'sex',
-        ],
-        'continuous': [
-            # 'age',
-            # 'educational-num',
-            # 'capital-gain',
-            # 'capital-loss',
-            # 'hours-per-week',
-        ],
-        'meta': [
-            'fnlwgt'
-        ],
-    }
-
-    return X, y, feature_types
-
-
-def generate_compas_dataset(
-    n=10_000, z_col='is_race_white', y_col='is_recid',
-    filepath='./../../data/compas/cox-violent-parsed.csv',
-):
-    """
-    Wrapper function for generating a sample of the Compas dataset. This
-    includes sampling down to just `n` samples, specifying the protected
-    attribute 'z',
-
-    Parameters
-    ---------
-    filepath : str
-        Filepath for dataset.
-    n : int, default 10_000
-        Number of records to sample from dataset.
-    z_col : str, default 'is_race_white'
-        The column to use as the protected attribute. Must be binary.
-    y_col : str, default 'is_recid'
-        The column to use as the target variable. Must be binary.
-
-    Returns
-    -------
-    X : pandas.DataFrame
-        The X (including z) columns.
-    y : pandas.Series
-        Just the y column.
-    feature_types : dict<str, array-like>
-        Mapping of column names to their type of feature. Used to when
-        constructing sklearn pipelines.
-    """
-
-    # Import dataset
-    df = pd.read_csv(filepath)
-
-    # Take sample if possible
-    if n < len(df):
-        df = df.sample(n)
-
-    # Filter out records where we don't know their compas risk score
-    df = df.query('is_recid >= 0').copy()
-
-    # Common transformations
-    df['is_race_white'] = (df['race'] == 'Caucasian').astype(int)
-    df = df.rename(columns={
-        'sex': 'gender',
-    })
-
-    # Specify the target variable `y`
-    df['y'] = df[y_col].astype(int)
-
-    # Specify the protected attribute `z`
-    df['z'] = df[z_col].astype(int)
-
-    # Display useful summary debug on z and y
-    logging.debug('Dataset count of each z, y group')
-    logging.debug(
-        df_to_log(
-            df.groupby(['z'])[['y']].agg(['count', 'mean'])
-      )
-    )
-
-    # Split into inputs and target variables
-    y = df['y']
-    X = df.copy().drop(columns='y')
-
-    # Balance the positive and negative classes
-    # rus = RandomUnderSampler(sampling_strategy=.5)
-    # X, y = rus.fit_resample(X, y)
-
-    feature_types = {
-        'boolean': [
-            'z',
-        ],
-        'categoric': [
-            'gender',
-            'age_cat',
-            'score_text',
-            'v_score_text',
-        ],
-        'continuous': [
-            # 'age',
-            # 'decile_score',
-            # 'juv_fel_count',
-            # 'priors_count',
-            # 'v_decile_score',
-        ],
-        'meta': [
-        ],
-    }
-
-    return X, y, feature_types
-
-
-def generate_boston_housing_dataset(n=10_000):
-    """
-    Wrapper function for generating a sample of the boston housing dataset.
-
-    Parameters
-    ---------
-    n : int, default 10_000
-        Number of records to sample from dataset.
-
-    Returns
-    -------
-    X : pandas.DataFrame
-        The X (including z) columns.
-    y : pandas.Series
-        Just the y column.
-    feature_types : dict<str, array-like>
-        Mapping of column names to their type of feature. Used to when
-        constructing sklearn pipelines.
-    """
-    data = fetch_boston(as_frame=True)
-    df = data.data.copy()
-    df['LSTAT_binary'] = df['LSTAT'] >= df['LSTAT'].median()
-    df['MEDV'] = data.target.copy()
-
-    # Take sample if possible
-    if n < len(df):
-        df = df.sample(n)
-    if n > len(df):
-        df = df.sample(n, replace=True)
-
-    # Specify the protected attribute `z`
-    # Median value for Z
-    df['z'] = (df['B'] >= 381.44).astype(int)
-
-    quantile_features = []
-    for cont_feat in ['B', 'CRIM', 'ZN', 'RM', 'LSTAT']:
-        for q in [
-                # .05,
-                # .1,
-                .25,
-        ]:
-            f = f"{cont_feat}__{q}"
-            df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
-            quantile_features.append(f)
-
-    y = (df['MEDV'] >= df['MEDV'].median()).astype(int).copy()
-    X = df.drop(columns='MEDV')
-
-    feature_types = {
-        'boolean': [
-            'z',
-        ] + quantile_features,
-        'categoric': [
-        ],
-        'continuous': [
-            # 'CRIM',  # per capita crime rate by town
-            # 'ZN',  # prop of residential land zoned for lots over 25,000 sqft
-            # 'INDUS',  # prop of non-retail business acres per town
-            # 'CHAS',  # Charles River dummy var (= 1 if bounds river; else 0)
-            # 'NOX',  # nitric oxides concentration (parts per 10 million)
-            # 'RM',  # average number of rooms per dwelling
-            # 'AGE',  # proportion of owner-occupied units built prior to 1940
-            # 'DIS',  # weighted distances to five Boston employment centers
-            # 'RAD',  # index of accessibility to radial highways
-            # 'TAX',  # full-value property-tax rate per $10,000
-            # 'PTRATIO',  # pupil-teacher ratio by town
-            # 'B', # 1000(Bk - 0.63)^2 where Bk is the proportion of Black ppl
-            # 'LSTAT',  # % lower status of the population
-        ],
-        'meta': [
-        ],
-        'target': [
-            'MEDV',  # Median value of owner-occupied homes in $1000's],
-        ],
-    }
-
-    return X, y, feature_types
 
 
 class FairLearnSkLearnWrapper():
@@ -433,6 +131,7 @@ def generate_expert_algo_lookup(feature_types):
         'HardtDemPar': dem_par_wrapper,
         'HardtEqOpp': eq_opp_wrapper,
         'PredEq': pred_eq_wrapper,
+        'Dummy': DummyClassifier(strategy="uniform"),
     }
 
     return expert_algo_lookup
@@ -539,6 +238,7 @@ def generate_single_exp_results_df(obj_set, results):
 
     return exp_df
 
+
 def new_trial_result(
         obj_set, muE, muE_hold, df_irl, muE_target=None, muL_target_hold=None,
 ):
@@ -636,14 +336,24 @@ def new_trial_result(
     return result
 
 
-def run_trial_source_domain(exp_info):
+def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
     """
     Runs 1 trial to learn weights in the source domain.
+
+    X, y, feature_types don't need to be passed. If they are, then
+    `generate_dataset()` is not invoked.
 
     Parameters
     ----------
     exp_info : dict
         Metadata about the experiment.
+    X : pandas.DataFrame, Optional
+        The X (including z) columns.
+    y : pandas.Series, Optional
+        Just the y column.
+    feature_types : dict<str, array-like>, Optional
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines.
 
     Returns
     -------
@@ -678,10 +388,11 @@ def run_trial_source_domain(exp_info):
     obj_set.reset()
 
     # Read in dataset
-    X, y, feature_types = generate_dataset(
-        exp_info['DATASET'],
-        n_samples=exp_info['N_DATASET_SAMPLES'],
-    )
+    if X is None or y is None or feature_types is None:
+        X, y, feature_types = generate_dataset(
+            exp_info['DATASET'],
+            n_samples=exp_info['N_DATASET_SAMPLES'],
+        )
 
     # These are the feature type sthat will be used as inputs for the expert
     # classifier.
@@ -752,15 +463,21 @@ def run_trial_source_domain(exp_info):
     x_cols.remove('z')
     obj_set_cols = [obj.name for obj in obj_set.objectives]
 
-    # Generate initial learned policies
-    mu, _demos = generate_demos_k_folds(
-        X=X_train,
-        y=y_train,
-        clf=DummyClassifier(strategy="uniform"),
-        obj_set=obj_set,
-        n_demos=exp_info['N_INIT_POLICIES'],
-    )
+    # Generate initial learned policies to serve as negative training examples
+    # for the SVM IRL classifier.
+    mu = []
+    for non_expert_algo in exp_info['NON_EXPERT_ALGOS']:
+        _mu, _demos = generate_demos_k_folds(
+            X=X_train,
+            y=y_train,
+            clf=expert_algo_lookup[non_expert_algo],
+            obj_set=obj_set,
+            n_demos=1,
+        )
+        mu.append(_mu[0])
 
+    mu = np.array(mu)
+    logging.info(f"muL:\n{mu}")
     X_irl_exp = pd.DataFrame(muE, columns=obj_set_cols)
     y_irl_exp = pd.Series(np.ones(exp_info['N_EXPERT_DEMOS']), dtype=int)
     X_irl_learn = pd.DataFrame(mu, columns=obj_set_cols)
@@ -826,6 +543,7 @@ def run_trial_source_domain(exp_info):
             reward_weights=reward_weights,
             skip_error_terms=True,
             method=exp_info['METHOD'],
+            min_freq_fill_pct=exp_info['MIN_FREQ_FILL_PCT'],
         )
 
         ##
@@ -1051,10 +769,15 @@ def run_trial_source_domain(exp_info):
     return muE, muE_hold, df_irl, weights, t_hold
 
 
-def run_trial_target_domain(exp_info, weights, t_hold):
+def run_trial_target_domain(
+        exp_info, weights, t_hold, X=None, y=None, feature_types=None,
+):
     """
     Runs 1 trial to learn a policy in a new domain using weights learned from
     another domain.
+
+    X, y, feature_types don't need to be passed. If they are, then
+    `generate_dataset()` is not invoked.
 
     Parameters
     ----------
@@ -1065,6 +788,13 @@ def run_trial_target_domain(exp_info, weights, t_hold):
     t_hold : array-like<float>, len(n_trials)
         The irl error histories. This is how we are selecting which weights to
         in the target domain.
+    X : pandas.DataFrame, Optional
+        The X (including z) columns.
+    y : pandas.Series, Optional
+        Just the y column.
+    feature_types : dict<str, array-like>, Optional
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines.
 
     Returns
     -------
@@ -1094,10 +824,11 @@ def run_trial_target_domain(exp_info, weights, t_hold):
         source_best_w[i] = weights[best_idx][i]
 
     # Read in target domain dataset
-    X, y, feature_types = generate_dataset(
-        exp_info['TARGET_DATASET'],
-        n_samples=exp_info['N_DATASET_SAMPLES'],
-    )
+    if X is None or y is None or feature_types is None:
+        X, y, feature_types = generate_dataset(
+            exp_info['TARGET_DATASET'],
+            n_samples=exp_info['N_DATASET_SAMPLES'],
+        )
 
     x_cols = (
         feature_types['boolean']
@@ -1168,6 +899,7 @@ def run_trial_target_domain(exp_info, weights, t_hold):
         reward_weights=reward_weights,
         skip_error_terms=True,
         method=exp_info['METHOD'],
+        min_freq_fill_pct=exp_info['MIN_FREQ_FILL_PCT'],
     )
 
     # Compute feature expectations of the learned policy
@@ -1179,7 +911,7 @@ def run_trial_target_domain(exp_info, weights, t_hold):
     logging.info(f"target domain muE = {np.round(muE_target.mean(axis=0), 3)}")
     logging.info(f"target domain muL_hold = {np.round(muL_target_hold, 3)}")
 
-    return muE_target, muL_target_hold
+    return muE_target, muL_target_hold, clf_pol
 
 
 def run_experiment(exp_info):
@@ -1229,7 +961,7 @@ def run_experiment(exp_info):
         muL_target_hold = None
 
         if exp_info['TARGET_DATASET'] is not None:
-            muE_target, muL_target_hold = run_trial_target_domain(
+            muE_target, muL_target_hold, clf_pol = run_trial_target_domain(
                 exp_info,
                 weights,
                 t_hold,

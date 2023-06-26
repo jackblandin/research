@@ -24,6 +24,7 @@ dependencies:
   # - tqdm
   # - twine
   - pip:
+    - folktables
     # - tensorflow==1.14.0
     # - setuptools==40.6.3
     # - git+https://github.com/jackblandin/gym-tiger.git  # Use when not env is stable
