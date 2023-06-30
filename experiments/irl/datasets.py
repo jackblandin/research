@@ -203,18 +203,35 @@ def generate_compas_dataset(
       )
     )
 
-    # Split into inputs and target variables
-    y = df['y']
-    X = df.copy().drop(columns='y')
-
     # Balance the positive and negative classes
     # rus = RandomUnderSampler(sampling_strategy=.5)
     # X, y = rus.fit_resample(X, y)
 
+    quantile_features = []
+    for cont_feat in [
+        # 'age',
+        # 'decile_score',
+        'juv_fel_count',
+        'priors_count',
+        # 'v_decile_score',
+    ]:
+        for q in [
+                .1,
+                .75,
+                .9,
+        ]:
+            f = f"{cont_feat}__{q}"
+            df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
+            quantile_features.append(f)
+
+    # Split into inputs and target variables
+    y = df['y']
+    X = df.copy().drop(columns='y')
+
     feature_types = {
         'boolean': [
             'z',
-        ],
+        ],# + quantile_features,
         'categoric': [
             'gender',
             'age_cat',
@@ -222,11 +239,6 @@ def generate_compas_dataset(
             'v_score_text',
         ],
         'continuous': [
-            # 'age',
-            # 'decile_score',
-            # 'juv_fel_count',
-            # 'priors_count',
-            # 'v_decile_score',
         ],
         'meta': [
         ],
@@ -405,7 +417,7 @@ def generate_acs_income(n=10_000, state=None):
             'COW',
             'MAR',
             'OCCP',
-            # 'POBP',
+            'POBP',
         ],
         'continuous': [
         ],

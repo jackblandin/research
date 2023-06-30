@@ -20,6 +20,8 @@ class SVM(BaseEstimator, ClassifierMixin):
         Kernel function.
         If str, must be 'gaussian', 'linear', 'polynomial', 'sigmoid', 'tanh'.
         If function, format is function(x, y) -> float
+    positive_weights_only : bool, Optional, default False
+        If True, only positive weights allowed.
     **kernel_args
         Additional arguments to pass into kernel functions.
 
@@ -72,8 +74,9 @@ class SVM(BaseEstimator, ClassifierMixin):
     >>> svm.plot_decision_boundary(X, y)
     >>> svm.plot_discriminants(X, y)
     """
-    def __init__(self, kernel='linear', **kernel_args):
-
+    def __init__(
+            self, kernel='linear', positive_weights_only=False, **kernel_args,
+    ):
         if isinstance(kernel, str):
             kernel = KERNEL_MAP.get(kernel)(**kernel_args)
         elif not callable(kernel):
@@ -84,6 +87,7 @@ class SVM(BaseEstimator, ClassifierMixin):
             raise ValueError(msg)
 
         self.kernel = kernel
+        self.positive_weights_only = positive_weights_only
 
     def fit(self, X, y, vectorized=None):
         """Fits SVM classifer.
@@ -137,6 +141,9 @@ class SVM(BaseEstimator, ClassifierMixin):
         # Our constraints:
         #     1. sum_i(ai*yi)=0
         #     2. ai >= 0
+        #     3. Positive weights only constraint:
+        #        for all j:
+        #            sum_i( X[i][j]*y[i] * a[i] >= 0 )
         #
         # Scipy LinearConstraint format:
         #    lb <= A.dot(x) <= ub
@@ -150,11 +157,36 @@ class SVM(BaseEstimator, ClassifierMixin):
         #         A = 1
         #         lb = 0
         #         ub = np.inf
+        #     Positive weights only constraint:
+        #         A = X[:, j] * y
+        #         lb = zero
+        #         ub = np.inf
         #
         con1 = optimize.LinearConstraint(y, 0, 0)
         con2 = {'type': 'ineq', 'fun': lambda a: a}
+
+        if not self.positive_weights_only:
+            constraints = (con1, con2)
+        else:
+            # Force weights to be positive
+            pos_weight_constraints = []
+
+            for j in range(X.shape[1]):
+                con = optimize.LinearConstraint(
+                    (
+                        (X[:,j].reshape(len(X), 1) * y.reshape(len(y), 1))
+                        .reshape(len(X))
+                    ),
+                    0,
+                    np.inf,
+                )
+                pos_weight_constraints.append(con)
+
+            constraints = (con1, con2) + tuple(pos_weight_constraints)
+        display(constraints)
+
         self.opt_result_ = optimize.minimize(loss, initial_alphas,
-                                             constraints=(con1, con2),
+                                             constraints=constraints,
                                              args=(X, y))
         # Find indices of support vectors
         sup_idx = np.where(self.opt_result_.x > 0.001)
@@ -217,10 +249,16 @@ class SVM(BaseEstimator, ClassifierMixin):
 
         return prob
 
-    def weights(self):
+    def weights(self, norm='l1'):
         """
         Computes the weights for each input feature. Used in IRL to infer the
         feature expectation weights. Requires that the model be fitted.
+
+        Parameters
+        ----------
+        norm : str, default 'l1'
+            The norm to feed into sklearn.preprocessing.normalize to normalize
+            the weights.
 
         Returns
         -------
@@ -228,14 +266,12 @@ class SVM(BaseEstimator, ClassifierMixin):
         """
         check_is_fitted(self, ['opt_result_', 'sup_idx_', 'sup_X_', 'sup_y_',
                                'sup_alphas_', 'offset_'])
-        sup_X_ = np.array(self.sup_X_)
-        for i in range(len(self.sup_y_)):
-            sup_X_[i] *= self.sup_y_[i]
-
-        weights = np.dot(self.sup_alphas_.T, sup_X_)
+        sup_X_times_sup_y = ( np.array(self.sup_X_) * self.sup_y_.reshape(len(self.sup_y_), 1)
+        )
+        weights = np.dot(self.sup_alphas_.T, sup_X_times_sup_y)
 
         # Normalize the weights
-        weights = normalize([weights], norm='l1')[0]
+        weights = normalize([weights], norm=norm)[0]
 
         return weights
 

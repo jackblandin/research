@@ -60,6 +60,36 @@ class FairLearnSkLearnWrapper():
         )
 
 
+class UnfairNoisyClassifier():
+    """
+    Wrapper around scikit-learn classifiers to intentionally make them slightly
+    fair and less accurate. This is useful when generating initial policies for
+    where having reasonably fair and accurate (but not optimal) classifiers
+    helps set the weights in the right directions.
+    """
+
+    def __init__(self, clf, prob):
+        self.clf = clf
+        self.prob = prob
+
+    def fit(self, X, y, **kwargs):
+        self.clf.fit(X, y, **kwargs)
+        return self
+
+    def predict(self, X, **kwargs):
+        preds = self.clf.predict(X, **kwargs)
+        override_indexes = np.argwhere(
+            np.random.rand(len(X)) < self.prob
+        ).flatten()
+
+        for idx in override_indexes:
+            if X.iloc[idx]['z'] == 1:
+                preds[idx] = 1
+            else:
+                preds[idx] = 0
+        return preds
+
+
 def generate_expert_algo_lookup(feature_types):
     """
     Parameters
@@ -126,12 +156,23 @@ def generate_expert_algo_lookup(feature_types):
         sensitive_features='z',
     )
 
+    dummy_pipe = UnfairNoisyClassifier(
+        clf=DummyClassifier(strategy="uniform"),
+        prob=0.1,
+    )
+
     expert_algo_lookup = {
         'OptAcc': opt_acc_pipe,
         'HardtDemPar': dem_par_wrapper,
         'HardtEqOpp': eq_opp_wrapper,
         'PredEq': pred_eq_wrapper,
-        'Dummy': DummyClassifier(strategy="uniform"),
+        'Dummy': dummy_pipe,
+        # Noisy
+        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=.1),
+        'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=.1),
+        'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=.1),
+        'PredEqNoisy': UnfairNoisyClassifier(clf=pred_eq_wrapper, prob=.1),
+        'DummyNoisy': UnfairNoisyClassifier(clf=dummy_pipe, prob=.1),
     }
 
     return expert_algo_lookup
@@ -336,7 +377,9 @@ def new_trial_result(
     return result
 
 
-def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
+def run_trial_source_domain(
+    exp_info, X=None, y=None, feature_types=None, plot_svm_iters=False,
+):
     """
     Runs 1 trial to learn weights in the source domain.
 
@@ -354,6 +397,8 @@ def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
     feature_types : dict<str, array-like>, Optional
         Mapping of column names to their type of feature. Used to when
         constructing sklearn pipelines.
+    plot_svm_iters : bool, default False
+        If True, plots the SVM iterations.
 
     Returns
     -------
@@ -514,7 +559,7 @@ def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
             pd.concat([y_irl_exp, y_irl_learn], axis=0)
             .reset_index(drop=True)
         )
-        svm = SVM().fit(X_irl, y_irl)
+        svm = SVM(positive_weights_only=True).fit(X_irl, y_irl)
         wi = svm.weights()
         weights.append(wi)
 
@@ -534,7 +579,15 @@ def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
         logging.debug('\tComputing the optimal policy given reward weights and `y|x` classifier...')
         reward_weights = { obj.name: wi[j] for j, obj in enumerate(obj_set.objectives) }
         test_df = pd.DataFrame(X_test)
-        test_df['y'] = y_test
+        #
+        # JDB 06/27/2023 – NOTE: mu0s need to be calculated using the predicted
+        # labels, not the true labels. Otherwise the optimizer solves for a
+        # policy that doesn't reflect observability. I discovered this issue by
+        # giving weights [0, 1, 0] into the run_trial_source_domain and
+        # noticing that the ouptput had poor demographic parity.
+        #
+        # test_df['y'] = y_test
+        test_df['y'] = clf.predict(X_test)
         clf_pol = compute_optimal_policy(
             clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
             clf=clf,
@@ -561,8 +614,8 @@ def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
         muj_hold = obj_set.compute_demo_feature_exp(demo_hold)
         mu_history.append(muj)
         mu_hold_history.append(muj_hold)
-        logging.debug(f"\t\t muL[i] = {np.round(muj, 3)}")
-        logging.debug(f"\t\t muL_hold[i] = {np.round(muj_hold, 3)}")
+        logging.info(f"\t\t muL[{i}] = {np.round(muj, 3)}")
+        logging.debug(f"\t\t muL_hold[{i}] = {np.round(muj_hold, 3)}")
 
         # Append policy's feature expectations to irl clf dataset
         X_irl_learn_i = pd.DataFrame(np.array([muj]), columns=obj_set_cols)
@@ -591,11 +644,11 @@ def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
         t_hold.append(ti_hold)
         mu_delta_l2norm_hist.append(mu_delta_l2norm)
         mu_delta_l2norm_hold_hist.append(mu_delta_l2norm_hold)
-        logging.debug(f"\t\t mu_delta[i] \t= {np.round(mu_delta, 3)}")
+        logging.info(f"\t\t mu_delta[{i}] \t= {np.round(mu_delta, 3)}")
         logging.debug(f"\t\t mu_delta_hold[i] \t= {np.round(mu_delta_hold, 3)}")
-        logging.debug(f"\t\t t[i] \t\t= {t[i]:.5f}")
+        logging.info(f"\t\t t[{i}] \t\t= {t[i]:.5f}")
         logging.debug(f"\t\t t_hold[i] \t\t= {t_hold[i]:.5f}")
-        logging.debug(f"\t\t weights[{i}] \t= {np.round(weights[i], 3)}")
+        logging.info(f"\t\t weights[{i}] \t= {np.round(weights[i], 3)}")
 
         ## Show a summary of the learned policy
         # logging.info(
@@ -695,74 +748,75 @@ def run_trial_source_domain(exp_info, X=None, y=None, feature_types=None):
     logging.debug('Experiment Summary')
     display(df_irl.round(3))
 
-     ###
-     ## Plot results
-     ###
-     #sns.set_theme(style='darkgrid', font_scale=1.2)
-     #feat_exp_combs = list(itertools.combinations(obj_set_cols, 2))
-     #exp = df_irl.query('is_expert == True').reset_index(drop=True)
-     #lrn = df_irl.query('is_expert == False').reset_index(drop=True)
-     #best_t_idx = lrn.query('t > 0')['t'].argmin()
-     #fig, axes = plt.subplots(
-     #    1,
-     #    len(feat_exp_combs),
-     #    figsize=(5*len(feat_exp_combs), 4),
-     #)
-     #axes = (axes,) if len(feat_exp_combs) == 1 else axes
-     #for i, (feat_exp_x, feat_exp_y) in enumerate(feat_exp_combs):
-     #    # Plot expert
-     #    axes[i].scatter(
-     #        exp[feat_exp_x],
-     #        exp[feat_exp_y],
-     #        label='$\mu^E$',
-     #        s=600,
-     #        alpha=1,
-     #        c='black',
-     #    )
-     #    # Inject noise so we can see the expert when it's overlapping
-     #    noise = exp_info['NOISE_FACTOR']*(np.random.rand(len(lrn))-.6)
-     #    # Plot the learned policies
-     #    axes[i].scatter(
-     #        lrn[feat_exp_x]+noise,
-     #        lrn[feat_exp_y]+noise,
-     #        label='$\mu^L_i$',
-     #        s=600,
-     #        alpha=.7,
-     #        c=cp[2],
-     #    )
-     #    axes[i].set_ylim([-.1, 1.1])
-     #    axes[i].set_xlim([-.1, 1.1])
-     #    axes[i].set_xlabel(feat_exp_x.replace('_', ' ').title())
-     #    axes[i].set_ylabel(feat_exp_y.replace('_', ' ').title())
-     #    if exp_info['ANNOTATE']:
-     #        # Label each learned policy with its ordered index
-     #        for idx, row in lrn.iterrows():
-     #            if row['is_init_policy']:
-     #                annotation = None
-     #            else:
-     #                annotation = idx
-     #            axes[i].annotate(
-     #                annotation,
-     #                (
-     #                    -.012+(row[feat_exp_x]+noise[idx]),
-     #                    -.015+(row[feat_exp_y]+noise[idx])
-     #                ),
-     #                fontsize=16,
-     #                fontweight=700,
-     #            )
-     #    # Color the best policy
-     #    axes[i].scatter(
-     #        [lrn.loc[best_t_idx][feat_exp_x]+noise[best_t_idx]],
-     #        [lrn.loc[best_t_idx][feat_exp_y]+noise[best_t_idx]],
-     #        label='Best $\mu^L_i$',
-     #        s=600,
-     #        alpha=1,
-     #        c=cp[1],
-     #    )
-     #    axes[i].legend(ncol=1, labelspacing=.7, loc='upper left')
+    ###
+    ## Plot results
+    ###
+    if plot_svm_iters:
+        sns.set_theme(style='darkgrid', font_scale=1.2)
+        feat_exp_combs = list(itertools.combinations(obj_set_cols, 2))
+        exp = df_irl.query('is_expert == True').reset_index(drop=True)
+        lrn = df_irl.query('is_expert == False').reset_index(drop=True)
+        best_t_idx = lrn.query('t > 0')['t'].argmin()
+        fig, axes = plt.subplots(
+            1,
+            len(feat_exp_combs),
+            figsize=(5*len(feat_exp_combs), 4),
+        )
+        axes = (axes,) if len(feat_exp_combs) == 1 else axes
+        for i, (feat_exp_x, feat_exp_y) in enumerate(feat_exp_combs):
+            # Plot expert
+            axes[i].scatter(
+                exp[feat_exp_x],
+                exp[feat_exp_y],
+                label='$\mu^E$',
+                s=600,
+                alpha=1,
+                c='black',
+            )
+            # Inject noise so we can see the expert when it's overlapping
+            noise = exp_info['NOISE_FACTOR']*(np.random.rand(len(lrn))-.6)
+            # Plot the learned policies
+            axes[i].scatter(
+                lrn[feat_exp_x]+noise,
+                lrn[feat_exp_y]+noise,
+                label='$\mu^L_i$',
+                s=600,
+                alpha=.7,
+                c=cp[2],
+            )
+            axes[i].set_ylim([-.1, 1.1])
+            axes[i].set_xlim([-.1, 1.1])
+            axes[i].set_xlabel(feat_exp_x.replace('_', ' ').title())
+            axes[i].set_ylabel(feat_exp_y.replace('_', ' ').title())
+            if exp_info['ANNOTATE']:
+                # Label each learned policy with its ordered index
+                for idx, row in lrn.iterrows():
+                    if row['is_init_policy']:
+                        annotation = None
+                    else:
+                        annotation = idx
+                    axes[i].annotate(
+                        annotation,
+                        (
+                            -.012+(row[feat_exp_x]+noise[idx]),
+                            -.015+(row[feat_exp_y]+noise[idx])
+                        ),
+                        fontsize=16,
+                        fontweight=700,
+                    )
+            # Color the best policy
+            axes[i].scatter(
+                [lrn.loc[best_t_idx][feat_exp_x]+noise[best_t_idx]],
+                [lrn.loc[best_t_idx][feat_exp_y]+noise[best_t_idx]],
+                label='Best $\mu^L_i$',
+                s=600,
+                alpha=1,
+                c=cp[1],
+            )
+            axes[i].legend(ncol=1, labelspacing=.7, loc='upper left')
 
-     #plt.suptitle(f"Best learned weights: {best_weight.round(2)}")
-     #plt.tight_layout()
+        plt.suptitle(f"Best learned weights: {best_weight.round(2)}")
+        plt.tight_layout()
 
     # End regular IRL trial
 
@@ -890,7 +944,15 @@ def run_trial_target_domain(
         obj.name: source_best_w[j] for j, obj in enumerate(obj_set.objectives)
     }
     test_df = pd.DataFrame(X_test)
-    test_df['y'] = y_test
+    #
+    # JDB 06/27/2023 – NOTE: mu0s need to be calculated using the predicted
+    # labels, not the true labels. Otherwise the optimizer solves for a
+    # policy that doesn't reflect observability. I discovered this issue by
+    # giving weights [0, 1, 0] into the run_trial_source_domain and
+    # noticing that the ouptput had poor demographic parity.
+    #
+    # test_df['y'] = y_test
+    test_df['y'] = clf.predict(X_test)
     clf_pol = compute_optimal_policy(
         clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
         clf=clf,
@@ -914,7 +976,10 @@ def run_trial_target_domain(
     return muE_target, muL_target_hold, clf_pol
 
 
-def run_experiment(exp_info):
+def run_experiment(
+        exp_info, source_X=None, source_y=None, source_feature_types=None,
+        target_X=None, target_y=None, target_feature_types=None,
+):
     """
     Runs experiment for source domain and optionally target domain based on
     the parameters in `exp_info`.
@@ -937,6 +1002,20 @@ def run_experiment(exp_info):
     exp_info : dict
         Saves the experiment parameters and metadata metadata as a JSON file
         "./../../data/experiment_output/fair_irl/exp_info/{timestamp}.json"
+    source_X : pandas.DataFrame, Optional
+        The X (including z) columns for the source domain.
+    source_y : pandas.Series, Optional
+        Just the y column for the source domain.
+    source_feature_types : dict<str, array-like>, Optional
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines for the source domain.
+    target_X : pandas.DataFrame, Optional
+        The X (including z) columns for the target domain.
+    target_y : pandas.Series, Optional
+        Just the y column for the target domain.
+    target_feature_types : dict<str, array-like>, Optional
+        Mapping of column names to their type of feature. Used to when
+        constructing sklearn pipelines for the target domain.
     """
     logging.info(f"exp_info: {exp_info}")
 
@@ -954,6 +1033,9 @@ def run_experiment(exp_info):
         # Run trials to learn weights on source domain
         muE, muE_hold, df_irl, weights, t_hold = run_trial_source_domain(
             exp_info,
+            X=source_X,
+            y=source_y,
+            feature_types=source_feature_types,
         )
 
         # Learn clf in target domain using weights learned in source domain
@@ -965,6 +1047,9 @@ def run_experiment(exp_info):
                 exp_info,
                 weights,
                 t_hold,
+                X=target_X,
+                y=target_y,
+                feature_types=target_feature_types,
             )
             muE_target_mean = muE_target.mean(axis=0)
 
@@ -1309,7 +1394,7 @@ def plot_results_target_domain(
         2,
         1,
         figsize=(5, 8.5),
-        height_ratios=[2,1.33],
+        height_ratios=[2, 1],
     )
     sns.boxplot(
         x=mu_df['Feature Expectation'],
@@ -1350,7 +1435,7 @@ def plot_results_target_domain(
     )
     ax2.set_ylabel(None)
     ax2.set_xlabel('Learned Weights')
-    ax2.set_ylim([-1.5, 1])
+    ax2.set_ylim([-1, 1])
     ax2.get_legend().remove()
     ax2.legend(
         title=None,

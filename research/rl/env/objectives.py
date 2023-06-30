@@ -231,8 +231,8 @@ class DemographicParityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        p_z0 = (ldf['z'] == 0).mean()
-        p_z1 = (ldf['z'] == 1).mean()
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum()
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum()
         ldf['A_ub'] = 0.0
         ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = -1 / p_z0
         ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = 1 / p_z1
@@ -260,8 +260,8 @@ class DemographicParityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        p_z0 = (ldf['z'] == 0).mean()
-        p_z1 = (ldf['z'] == 1).mean()
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum()
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum()
         ldf['A_ub'] = 0.0
         ldf.loc[filt__yhat1_giv_z0, 'A_ub'] = 1 / p_z0
         ldf.loc[filt__yhat1_giv_z1, 'A_ub'] = -1 / p_z1
@@ -287,8 +287,8 @@ class DemographicParityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        p_z0 = (ldf['z'] == 0).mean()
-        p_z1 = (ldf['z'] == 1).mean()
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum()
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum()
         ldf['r'] = np.zeros(len(ldf))
         ldf.loc[filt__yhat1_giv_z0, 'r'] = -1 / p_z0
         ldf.loc[filt__yhat1_giv_z1, 'r'] = 1 / p_z1
@@ -315,8 +315,8 @@ class DemographicParityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_z0 = (ldf['z'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_z1 = (ldf['z'] == 1) & (ldf['yhat'] == 1)
-        p_z0 = (ldf['z'] == 0).mean()
-        p_z1 = (ldf['z'] == 1).mean()
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum()
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum()
         ldf['r'] = np.zeros(len(ldf))
         ldf.loc[filt__yhat1_giv_z0, 'r'] = 1 / p_z0
         ldf.loc[filt__yhat1_giv_z1, 'r'] = -1 / p_z1
@@ -382,8 +382,8 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
         filt__yhat1_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        p_z0_y1 = ((ldf['z'] == 0) & (ldf['y'] == 1)).mean()
-        p_z1_y1 = ((ldf['z'] == 1) & (ldf['y'] == 1)).mean()
+        p_z0_y1 = ldf[(ldf['z'] == 0) & (ldf['y'] == 1)]['mu0'].sum()
+        p_z1_y1 = ldf[(ldf['z'] == 1) & (ldf['y'] == 1)]['mu0'].sum()
         ldf['A_ub'] = 0.0
         ldf.loc[filt__yhat1_y1_z0, 'A_ub'] = -1 / p_z0_y1
         ldf.loc[filt__yhat1_y1_z1, 'A_ub'] = 1 / p_z1_y1
@@ -410,8 +410,8 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
         filt__yhat1_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        p_z0_y1 = ((ldf['z'] == 0) & (ldf['y'] == 1)).mean()
-        p_z1_y1 = ((ldf['z'] == 1) & (ldf['y'] == 1)).mean()
+        p_z0_y1 = ldf[(ldf['z'] == 0) & (ldf['y'] == 1)]['mu0'].sum()
+        p_z1_y1 = ldf[(ldf['z'] == 1) & (ldf['y'] == 1)]['mu0'].sum()
         ldf['A_ub'] = 0.0
         ldf.loc[filt__yhat1_y1_z0, 'A_ub'] = 1 / p_z0_y1
         ldf.loc[filt__yhat1_y1_z1, 'A_ub'] = -1 / p_z1_y1
@@ -437,8 +437,8 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
         filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        p_y1_z0 = ((ldf['y'] == 1) & (ldf['z'] == 0)).mean()
-        p_y1_z1 = ((ldf['y'] == 1) & (ldf['z'] == 1)).mean()
+        p_y1_z0 = ldf[(ldf['y'] == 1) & (ldf['z'] == 0)]['mu0'].sum()
+        p_y1_z1 = ldf[(ldf['y'] == 1) & (ldf['z'] == 1)]['mu0'].sum()
         ldf['r'] = np.zeros(len(ldf))
         ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = -1 / p_y1_z0
         ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = 1 / p_y1_z0
@@ -465,8 +465,8 @@ class EqualOpportunityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_y1_z0 = (ldf['z'] == 0) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
         filt__yhat1_giv_y1_z1 = (ldf['z'] == 1) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
-        p_y1_z0 = ((ldf['y'] == 1) & (ldf['z'] == 0)).mean()
-        p_y1_z1 = ((ldf['y'] == 1) & (ldf['z'] == 1)).mean()
+        p_y1_z0 = ldf[(ldf['y'] == 1) & (ldf['z'] == 0)]['mu0'].sum()
+        p_y1_z1 = ldf[(ldf['y'] == 1) & (ldf['z'] == 1)]['mu0'].sum()
         ldf['r'] = np.zeros(len(ldf))
         ldf.loc[filt__yhat1_giv_y1_z0, 'r'] = 1 / p_y1_z0
         ldf.loc[filt__yhat1_giv_y1_z1, 'r'] = -1 / p_y1_z0
@@ -529,8 +529,8 @@ class PredictiveEqualityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
-        p_z0_y0 = ((ldf['z'] == 0) & (ldf['y'] == 0)).mean()
-        p_z1_y0 = ((ldf['z'] == 1) & (ldf['y'] == 0)).mean()
+        p_z0_y0 = ldf[(ldf['z'] == 0) & (ldf['y'] == 0)]['mu0'].sum()
+        p_z1_y0 = ldf[(ldf['z'] == 1) & (ldf['y'] == 0)]['mu0'].sum()
         ldf['A_ub'] = 0.0
         ldf.loc[filt__yhat1_y0_z0, 'A_ub'] = -1 / p_z0_y0
         ldf.loc[filt__yhat1_y0_z1, 'A_ub'] = 1 / p_z1_y0
@@ -557,8 +557,8 @@ class PredictiveEqualityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
-        p_z0_y0 = ((ldf['z'] == 0) & (ldf['y'] == 0)).mean()
-        p_z1_y0 = ((ldf['z'] == 1) & (ldf['y'] == 0)).mean()
+        p_z0_y0 = ldf[(ldf['z'] == 0) & (ldf['y'] == 0)]['mu0'].sum()
+        p_z1_y0 = ldf[(ldf['z'] == 1) & (ldf['y'] == 0)]['mu0'].sum()
         ldf['A_ub'] = 0.0
         ldf.loc[filt__yhat1_y0_z0, 'A_ub'] = 1 / p_z0_y0
         ldf.loc[filt__yhat1_y0_z1, 'A_ub'] = -1 / p_z1_y0
@@ -584,8 +584,8 @@ class PredictiveEqualityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
-        p_y0_z0 = ((ldf['y'] == 0) & (ldf['z'] == 0)).mean()
-        p_y0_z1 = ((ldf['y'] == 0) & (ldf['z'] == 1)).mean()
+        p_y0_z0 = ldf[(ldf['y'] == 0) & (ldf['z'] == 0)]['mu0'].sum()
+        p_y0_z1 = ldf[(ldf['y'] == 0) & (ldf['z'] == 1)]['mu0'].sum()
         ldf['r'] = np.zeros(len(ldf))
         ldf.loc[filt__yhat1_giv_y0_z0, 'r'] = -1 / p_y0_z0
         ldf.loc[filt__yhat1_giv_y0_z1, 'r'] = 1 / p_y0_z0
@@ -612,8 +612,8 @@ class PredictiveEqualityObjective(AbsoluteValueObjective):
         ldf = ldf.copy()
         filt__yhat1_giv_y0_z0 = (ldf['z'] == 0) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
         filt__yhat1_giv_y0_z1 = (ldf['z'] == 1) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
-        p_y0_z0 = ((ldf['y'] == 0) & (ldf['z'] == 0)).mean()
-        p_y0_z1 = ((ldf['y'] == 0) & (ldf['z'] == 1)).mean()
+        p_y0_z0 = ldf[(ldf['y'] == 0) & (ldf['z'] == 0)]['mu0'].sum()
+        p_y0_z1 = ldf[(ldf['y'] == 0) & (ldf['z'] == 1)]['mu0'].sum()
         ldf['r'] = np.zeros(len(ldf))
         ldf.loc[filt__yhat1_giv_y0_z0, 'r'] = 1 / p_y0_z0
         ldf.loc[filt__yhat1_giv_y0_z1, 'r'] = -1 / p_y0_z0

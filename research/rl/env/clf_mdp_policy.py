@@ -98,7 +98,7 @@ class ClassificationMDPPolicy(BaseEstimator, ClassifierMixin):
         # Get rid of any unused columns otherwise the state lookup breaks.
         df = df[self.mdp.x_cols + ['z', 'y']]
 
-        # Reduce state input using fitted state_reducer_
+        # Transform state input using fitted state_reducer_
         for x in self.mdp.state_reducer_.keys():
             for x_val in self.mdp.state_reducer_[x]:
                 df.loc[df[x] == x_val, x] = self.mdp.state_reducer_[x][x_val]
