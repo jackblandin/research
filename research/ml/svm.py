@@ -183,13 +183,16 @@ class SVM(BaseEstimator, ClassifierMixin):
                 pos_weight_constraints.append(con)
 
             constraints = (con1, con2) + tuple(pos_weight_constraints)
-        display(constraints)
 
         self.opt_result_ = optimize.minimize(loss, initial_alphas,
                                              constraints=constraints,
                                              args=(X, y))
         # Find indices of support vectors
         sup_idx = np.where(self.opt_result_.x > 0.001)
+
+        if len(sup_idx[0]) == 0:
+            raise ValueError('No support vectors found.')
+
         self.sup_idx_ = sup_idx
         self.sup_X_ = X[sup_idx]
         self.sup_y_ = y[sup_idx]

@@ -151,8 +151,8 @@ def sklearn_clf_pipeline(feature_types, clf_inst):
     categoric_trf = Pipeline(
         steps=[
             ("encoder", OneHotEncoder(
-                handle_unknown="ignore", min_frequency=.02)),
-            ("selector", SelectPercentile(chi2, percentile=50)),
+                handle_unknown="ignore", min_frequency=.01)),
+            ("selector", SelectPercentile(chi2, percentile=90)),
         ]
     )
     transformers = []

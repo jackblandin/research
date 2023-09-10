@@ -111,8 +111,8 @@ def generate_adult_dataset(
     # doing IRL.
     #
     # Balance the positive and negative classes
-    # rus = RandomUnderSampler(sampling_strategy=.5)
-    # X, y = rus.fit_resample(X, y)
+    rus = RandomUnderSampler(sampling_strategy=.5)
+    X, y = rus.fit_resample(X, y)
     feature_types = {
         'boolean': [
             'z',
@@ -282,7 +282,13 @@ def generate_boston_housing_dataset(n=10_000):
     df['z'] = (df['B'] >= 381.44).astype(int)
 
     quantile_features = []
-    for cont_feat in ['B', 'CRIM', 'ZN', 'RM', 'LSTAT']:
+    for cont_feat in [
+            'B',
+            'CRIM',
+            'ZN',
+            'RM',
+            'LSTAT',
+    ]:
         for q in [
                 # .05,
                 # .1,
@@ -292,9 +298,12 @@ def generate_boston_housing_dataset(n=10_000):
             df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
             quantile_features.append(f)
 
-    y = (df['MEDV'] >= df['MEDV'].median()).astype(int).copy()
+    y = (df['MEDV'] >= df['MEDV'].quantile(.75)).astype(int).copy()
     X = df.drop(columns='MEDV')
 
+    # Balance the positive and negative classes
+    rus = RandomUnderSampler(sampling_strategy=.5)
+    X, y = rus.fit_resample(X, y)
     feature_types = {
         'boolean': [
             'z',

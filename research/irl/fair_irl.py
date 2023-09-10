@@ -244,4 +244,12 @@ def irl_error(w, muE, muL, norm_weights=False):
             best_err = err
             best_j = j
 
+    # TODO 08/17/2023: double check this is actually doing what we want.
+    # If so, delete the negative weight check on line 693 of
+    # `experiment_utils.py`.
+    if not np.all(w > -1e-5):
+        # Don't allow negative weights to be the best. Use only to help
+        # iterate towards optimal solution.
+        best_err = 1
+
     return best_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]

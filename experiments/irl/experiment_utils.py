@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from fairlearn.postprocessing import ThresholdOptimizer
+from matplotlib.ticker import FormatStrFormatter
 from research.rl.env.clf_mdp import *
 from research.rl.env.clf_mdp_policy import *
 from research.rl.env.objectives import *
@@ -63,11 +64,10 @@ class FairLearnSkLearnWrapper():
 class UnfairNoisyClassifier():
     """
     Wrapper around scikit-learn classifiers to intentionally make them slightly
-    fair and less accurate. This is useful when generating initial policies for
-    where having reasonably fair and accurate (but not optimal) classifiers
-    helps set the weights in the right directions.
+    less performant. This is useful when generating initial policies where
+    having reasonably fair and accurate (but not optimal) classifiers helps set
+    the weights in the right directions.
     """
-
     def __init__(self, clf, prob):
         self.clf = clf
         self.prob = prob
@@ -78,15 +78,25 @@ class UnfairNoisyClassifier():
 
     def predict(self, X, **kwargs):
         preds = self.clf.predict(X, **kwargs)
-        override_indexes = np.argwhere(
-            np.random.rand(len(X)) < self.prob
+
+        z0_override_indexes = np.argwhere(
+            np.random.rand(len(X)) < self.prob[0]
         ).flatten()
 
-        for idx in override_indexes:
-            if X.iloc[idx]['z'] == 1:
-                preds[idx] = 1
-            else:
-                preds[idx] = 0
+        z1_override_indexes = np.argwhere(
+            np.random.rand(len(X)) < self.prob[1]
+        ).flatten()
+
+        for idx in z0_override_indexes:
+            z = X.iloc[idx]['z']
+            if z == 0:
+                preds[idx] = 1 - preds[idx]
+
+        for idx in z1_override_indexes:
+            z = X.iloc[idx]['z']
+            if z == 1:
+                preds[idx] = 1 - preds[idx]
+
         return preds
 
 
@@ -156,10 +166,7 @@ def generate_expert_algo_lookup(feature_types):
         sensitive_features='z',
     )
 
-    dummy_pipe = UnfairNoisyClassifier(
-        clf=DummyClassifier(strategy="uniform"),
-        prob=0.1,
-    )
+    dummy_pipe = DummyClassifier(strategy='uniform')
 
     expert_algo_lookup = {
         'OptAcc': opt_acc_pipe,
@@ -168,11 +175,11 @@ def generate_expert_algo_lookup(feature_types):
         'PredEq': pred_eq_wrapper,
         'Dummy': dummy_pipe,
         # Noisy
-        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=.1),
-        'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=.1),
-        'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=.1),
-        'PredEqNoisy': UnfairNoisyClassifier(clf=pred_eq_wrapper, prob=.1),
-        'DummyNoisy': UnfairNoisyClassifier(clf=dummy_pipe, prob=.1),
+        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.05, .1]),
+        'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=[.1, .1]),
+        'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=[.1, .1]),
+        'PredEqNoisy': UnfairNoisyClassifier(clf=pred_eq_wrapper, prob=[.1, .1]),
+        'DummyNoisy': UnfairNoisyClassifier(clf=dummy_pipe, prob=[.1, .1]),
     }
 
     return expert_algo_lookup
@@ -416,258 +423,277 @@ def run_trial_source_domain(
     t_hold : array-like<float>. Shape(n_irl_loop_iters)
         The irl error on the holdout set.
     """
-    # Initiate objectives
-    objectives = []
-    for obj_name in exp_info['OBJECTIVE_NAMES']:
-        objectives.append(OBJ_LOOKUP_BY_NAME[obj_name]())
-    obj_set = ObjectiveSet(objectives)
-    del objectives
+    # Wrap in a loop that requires error convergence. Reset if not converged.
+    converged = False
+    while not converged:
 
-    # Set observability level
-    if 'FO' in exp_info['IRL_METHOD']:
-        CAN_OBSERVE_Y = True
-    else:
-        CAN_OBSERVE_Y = False
+        # Initiate objectives
+        objectives = []
+        for obj_name in exp_info['OBJECTIVE_NAMES']:
+            objectives.append(OBJ_LOOKUP_BY_NAME[obj_name]())
+        obj_set = ObjectiveSet(objectives)
+        del objectives
 
-    # Reset the objective set since they get fitted in each trial run
-    obj_set.reset()
+        # Set observability level
+        if 'FO' in exp_info['IRL_METHOD']:
+            CAN_OBSERVE_Y = True
+        else:
+            CAN_OBSERVE_Y = False
 
-    # Read in dataset
-    if X is None or y is None or feature_types is None:
-        X, y, feature_types = generate_dataset(
-            exp_info['DATASET'],
-            n_samples=exp_info['N_DATASET_SAMPLES'],
+        # Reset the objective set since they get fitted in each trial run
+        obj_set.reset()
+
+        # Read in dataset
+        if X is None or y is None or feature_types is None:
+            X, y, feature_types = generate_dataset(
+                exp_info['DATASET'],
+                n_samples=exp_info['N_DATASET_SAMPLES'],
+            )
+
+        # These are the feature type sthat will be used as inputs for the expert
+        # classifier.
+        expert_demo_feature_types = feature_types
+
+        # These are the feature types that will be used in the classifier that will
+        # predict `y` given `X` when learning the optimal policy for a given reward
+        # function.
+        irl_loop_feature_types = feature_types
+
+        expert_algo_lookup = generate_expert_algo_lookup(expert_demo_feature_types)
+
+        # Split data into 3 sets.
+        #     1. Demo - Produces expert demonstratinos
+        #         1A. Train – Used for predicting Y from Z,X
+        #         1B. Test – used for comparing muL with muE
+        #     2. Hold – computes the unbiased values for muL and t (dataset is
+        #.       never shown to the IRL learning algo.)
+        X_demo, X_hold, y_demo, y_hold = train_test_split(X, y, test_size=.2)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_demo,
+            y_demo,
+            test_size=.5,
         )
+        del X_demo, y_demo # Make sure I don't acidentally use these later on
 
-    # These are the feature type sthat will be used as inputs for the expert
-    # classifier.
-    expert_demo_feature_types = feature_types
-
-    # These are the feature types that will be used in the classifier that will
-    # predict `y` given `X` when learning the optimal policy for a given reward
-    # function.
-    irl_loop_feature_types = feature_types
-
-    expert_algo_lookup = generate_expert_algo_lookup(expert_demo_feature_types)
-
-    # Split data into 3 sets.
-    #     1. Demo - Produces expert demonstratinos
-    #         1A. Train – Used for predicting Y from Z,X
-    #         1B. Test – used for comparing muL with muE
-    #     2. Hold – computes the unbiased values for muL and t (dataset is
-    #.       never shown to the IRL learning algo.)
-    X_demo, X_hold, y_demo, y_hold = train_test_split(X, y, test_size=.2)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_demo,
-        y_demo,
-        test_size=.5,
-    )
-    del X_demo, y_demo # Make sure I don't acidentally use these later on
-
-    # Generate expert demonstrations to learn from
-    muE, demosE = generate_demos_k_folds(
-        X=X_test,
-        y=y_test,
-        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
-        obj_set=obj_set,
-        n_demos=exp_info['N_EXPERT_DEMOS'],
-    )
-    logging.info(f"muE:\n{muE}")
-
-    # Generate expert demonstrations to learn for computing learned
-    # performance. These expert demos are never shown to the IRL algo and are
-    # only used for performance measurement.
-    muE_hold, demosE_hold = generate_demos_k_folds(
-        X=X_hold,
-        y=y_hold,
-        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
-        obj_set=obj_set,
-        n_demos=exp_info['N_EXPERT_DEMOS'],
-    )
-    logging.info(f"muE_hold:\n{muE_hold}")
-
-    ##
-    # Run IRL loop.
-    # Create a clf dataset where inputs are feature expectations and outputs
-    # are whether the policy is expert or learned through IRL iterations. Then
-    # train an SVM classifier on this dataset. Then extract the weights of the
-    # svm and use them as the weights for the "reward" function. Then use this
-    # reward function to learn a policy (classifier). Then compute the feature
-    # expectations from this classifer on the irl hold-out set. Then compute
-    # the error between the feature expectations of this learned clf and the
-    # demonstration feature exp. If this error is less than epsilon, stop. The
-    # reward function is the final set of weights.
-    ##
-
-    # Initiate variables needed to run IRL Loop
-    x_cols = (
-        irl_loop_feature_types['boolean']
-        + irl_loop_feature_types['categoric']
-        + irl_loop_feature_types['continuous']
-    )
-    x_cols.remove('z')
-    obj_set_cols = [obj.name for obj in obj_set.objectives]
-
-    # Generate initial learned policies to serve as negative training examples
-    # for the SVM IRL classifier.
-    mu = []
-    for non_expert_algo in exp_info['NON_EXPERT_ALGOS']:
-        _mu, _demos = generate_demos_k_folds(
-            X=X_train,
-            y=y_train,
-            clf=expert_algo_lookup[non_expert_algo],
+        # Generate expert demonstrations to learn from
+        muE, demosE = generate_demos_k_folds(
+            X=X_test,
+            y=y_test,
+            clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
             obj_set=obj_set,
-            n_demos=1,
+            n_demos=exp_info['N_EXPERT_DEMOS'],
         )
-        mu.append(_mu[0])
+        logging.info(f"muE:\n{muE}")
 
-    mu = np.array(mu)
-    logging.info(f"muL:\n{mu}")
-    X_irl_exp = pd.DataFrame(muE, columns=obj_set_cols)
-    y_irl_exp = pd.Series(np.ones(exp_info['N_EXPERT_DEMOS']), dtype=int)
-    X_irl_learn = pd.DataFrame(mu, columns=obj_set_cols)
-    y_irl_learn = pd.Series(np.zeros(len(mu)), dtype=int)
-
-    t = []  # Errors for each iteration
-    t_hold = []  # Errors on hold out set for each iteration
-    mu_delta_l2norm_hist = []
-    mu_delta_l2norm_hold_hist = []
-    weights = []
-    i = 0
-    demo_history = []
-    demo_hold_history = []
-    mu_history = []
-    mu_hold_history = []
-    mu_best_history = []
-    mu_best_hold_history = []
-
-    # Start the IRL Loop
-    logging.debug('')
-    logging.debug('Starting IRL Loop ...')
-
-    while True:
-        logging.info(f"\tIRL Loop iteration {i+1}/{exp_info['MAX_ITER']} ...")
-
-        # Train SVM classifier that distinguishes which demonstrations are
-        # expert and which were generated from this loop.
-        logging.debug('\tFitting SVM classifier...')
-        X_irl = (
-            pd.concat([X_irl_exp, X_irl_learn], axis=0)
-            .reset_index(drop=True)
-        )
-        y_irl = (
-            pd.concat([y_irl_exp, y_irl_learn], axis=0)
-            .reset_index(drop=True)
-        )
-        svm = SVM(positive_weights_only=True).fit(X_irl, y_irl)
-        wi = svm.weights()
-        weights.append(wi)
-
-        ##
-        # Learn a policy (clf_pol) from the reward (SVM) weights.
-        ##
-
-        # Fit a classifier that predicts `y` from `X`.
-        logging.debug('\tFitting `y|x` predictor for clf policy...')
-        clf = sklearn_clf_pipeline(
-            feature_types=irl_loop_feature_types,
-            clf_inst=RandomForestClassifier(),
-        )
-        clf.fit(X_train, y_train)
-
-        # Learn a policy that maximizes the reward function.
-        logging.debug('\tComputing the optimal policy given reward weights and `y|x` classifier...')
-        reward_weights = { obj.name: wi[j] for j, obj in enumerate(obj_set.objectives) }
-        test_df = pd.DataFrame(X_test)
-        #
-        # JDB 06/27/2023 – NOTE: mu0s need to be calculated using the predicted
-        # labels, not the true labels. Otherwise the optimizer solves for a
-        # policy that doesn't reflect observability. I discovered this issue by
-        # giving weights [0, 1, 0] into the run_trial_source_domain and
-        # noticing that the ouptput had poor demographic parity.
-        #
-        # test_df['y'] = y_test
-        test_df['y'] = clf.predict(X_test)
-        clf_pol = compute_optimal_policy(
-            clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
-            clf=clf,
-            x_cols=x_cols,
+        # Generate expert demonstrations to learn for computing learned
+        # performance. These expert demos are never shown to the IRL algo and are
+        # only used for performance measurement.
+        muE_hold, demosE_hold = generate_demos_k_folds(
+            X=X_hold,
+            y=y_hold,
+            clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
             obj_set=obj_set,
-            reward_weights=reward_weights,
-            skip_error_terms=True,
-            method=exp_info['METHOD'],
-            min_freq_fill_pct=exp_info['MIN_FREQ_FILL_PCT'],
+            n_demos=exp_info['N_EXPERT_DEMOS'],
         )
+        logging.info(f"muE_hold:\n{muE_hold}")
 
         ##
-        # Measure and record the error of the learned policy, and keep it as
-        # a negative training example for next IRL Loop iteration.
+        # Run IRL loop.
+        # Create a clf dataset where inputs are feature expectations and outputs
+        # are whether the policy is expert or learned through IRL iterations. Then
+        # train an SVM classifier on this dataset. Then extract the weights of the
+        # svm and use them as the weights for the "reward" function. Then use this
+        # reward function to learn a policy (classifier). Then compute the feature
+        # expectations from this classifer on the irl hold-out set. Then compute
+        # the error between the feature expectations of this learned clf and the
+        # demonstration feature exp. If this error is less than epsilon, stop. The
+        # reward function is the final set of weights.
         ##
 
-        # Compute feature expectations of the learned policy
-        logging.debug('\tGenerating learned demostration...')
-        demo = generate_demo(clf_pol, X_test, y_test, can_observe_y=CAN_OBSERVE_Y)
-        demo_hold = generate_demo(clf_pol, X_hold, y_hold, can_observe_y=False)
-        demo_history.append(demo)
-        demo_hold_history.append(demo_hold)
-        muj = obj_set.compute_demo_feature_exp(demo)
-        muj_hold = obj_set.compute_demo_feature_exp(demo_hold)
-        mu_history.append(muj)
-        mu_hold_history.append(muj_hold)
-        logging.info(f"\t\t muL[{i}] = {np.round(muj, 3)}")
-        logging.debug(f"\t\t muL_hold[{i}] = {np.round(muj_hold, 3)}")
-
-        # Append policy's feature expectations to irl clf dataset
-        X_irl_learn_i = pd.DataFrame(np.array([muj]), columns=obj_set_cols)
-        y_irl_learn_i = pd.Series(np.zeros(1), dtype=int)
-        X_irl_learn = pd.concat([X_irl_learn, X_irl_learn_i], axis=0)
-        y_irl_learn = pd.concat([y_irl_learn, y_irl_learn_i], axis=0)
-
-        # Compute error of the learned policy: t[i] = wT(muE-mu[j])
-        # This is equivalent to computing the SVM margin.
-        ti, best_j, mu_delta, mu_delta_l2norm = irl_error(
-            wi,
-            muE,
-            mu_history,
-            norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'],
+        # Initiate variables needed to run IRL Loop
+        x_cols = (
+            irl_loop_feature_types['boolean']
+            + irl_loop_feature_types['categoric']
+            + irl_loop_feature_types['continuous']
         )
-        # Do it for the hold-out set as well.
-        ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(
-            wi,
-            muE_hold,
-            mu_hold_history,
-            norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'],
-        )
-        mu_best_history.append(mu_history[best_j])
-        mu_best_hold_history.append(mu_hold_history[best_j])
-        t.append(ti)
-        t_hold.append(ti_hold)
-        mu_delta_l2norm_hist.append(mu_delta_l2norm)
-        mu_delta_l2norm_hold_hist.append(mu_delta_l2norm_hold)
-        logging.info(f"\t\t mu_delta[{i}] \t= {np.round(mu_delta, 3)}")
-        logging.debug(f"\t\t mu_delta_hold[i] \t= {np.round(mu_delta_hold, 3)}")
-        logging.info(f"\t\t t[{i}] \t\t= {t[i]:.5f}")
-        logging.debug(f"\t\t t_hold[i] \t\t= {t_hold[i]:.5f}")
-        logging.info(f"\t\t weights[{i}] \t= {np.round(weights[i], 3)}")
+        x_cols.remove('z')
+        obj_set_cols = [obj.name for obj in obj_set.objectives]
 
-        ## Show a summary of the learned policy
-        # logging.info(
-        #     df_to_log(
-        #         (
-        #             demo.groupby(['z']+x_cols+['y', 'yhat'])
-        #             [['age']].agg(['count'])
-        #         ),
-        #         title='\tLearned Policy:',
-        #         tab_level=3,
-        #     )
-        # )
+        # Generate initial learned policies to serve as negative training examples
+        # for the SVM IRL classifier.
+        mu = []
+        for non_expert_algo in exp_info['NON_EXPERT_ALGOS']:
+            _mu, _demos = generate_demos_k_folds(
+                X=X_train,
+                y=y_train,
+                clf=expert_algo_lookup[non_expert_algo],
+                obj_set=obj_set,
+                n_demos=1,
+            )
+            mu.append(_mu[0])
 
-        if ti < exp_info['EPSILON'] or i >= exp_info['MAX_ITER'] - 1:
-            break
+        mu = np.array(mu)
+        logging.info(f"muL:\n{mu}")
+        X_irl_exp = pd.DataFrame(muE, columns=obj_set_cols)
+        y_irl_exp = pd.Series(np.ones(exp_info['N_EXPERT_DEMOS']), dtype=int)
+        X_irl_learn = pd.DataFrame(mu, columns=obj_set_cols)
+        y_irl_learn = pd.Series(np.zeros(len(mu)), dtype=int)
 
-        i += 1
+        t = []  # Errors for each iteration
+        t_hold = []  # Errors on hold out set for each iteration
+        mu_delta_l2norm_hist = []
+        mu_delta_l2norm_hold_hist = []
+        weights = []
+        i = 0
+        demo_history = []
+        demo_hold_history = []
+        mu_history = []
+        mu_hold_history = []
+        mu_best_history = []
+        mu_best_hold_history = []
 
-        # End IRL Loop
+        # Start the IRL Loop
+        logging.debug('')
+        logging.debug('Starting IRL Loop ...')
+
+        while True:
+            logging.info(f"\tIRL Loop iteration {i+1}/{exp_info['MAX_ITER']} ...")
+
+            # Train SVM classifier that distinguishes which demonstrations are
+            # expert and which were generated from this loop.
+            logging.debug('\tFitting SVM classifier...')
+            X_irl = (
+                pd.concat([X_irl_exp, X_irl_learn], axis=0)
+                .reset_index(drop=True)
+            )
+            y_irl = (
+                pd.concat([y_irl_exp, y_irl_learn], axis=0)
+                .reset_index(drop=True)
+            )
+            try:
+                svm = SVM(positive_weights_only=True).fit(X_irl, y_irl)
+            except ValueError as e:
+                logging.info('\t\tAllowing negative weights.')
+                svm = SVM(positive_weights_only=False).fit(X_irl, y_irl)
+
+            wi = svm.weights()
+            weights.append(wi)
+
+            ##
+            # Learn a policy (clf_pol) from the reward (SVM) weights.
+            ##
+
+            # Fit a classifier that predicts `y` from `X`.
+            logging.debug('\tFitting `y|x` predictor for clf policy...')
+            clf = sklearn_clf_pipeline(
+                feature_types=irl_loop_feature_types,
+                clf_inst=RandomForestClassifier(),
+            )
+            clf.fit(X_train, y_train)
+
+            # Learn a policy that maximizes the reward function.
+            logging.debug('\tComputing the optimal policy given reward weights and `y|x` classifier...')
+            reward_weights = { obj.name: wi[j] for j, obj in enumerate(obj_set.objectives) }
+            test_df = pd.DataFrame(X_test)
+            #
+            # JDB 06/27/2023 – NOTE: mu0s need to be calculated using the predicted
+            # labels, not the true labels. Otherwise the optimizer solves for a
+            # policy that doesn't reflect observability. I discovered this issue by
+            # giving weights [0, 1, 0] into the run_trial_source_domain and
+            # noticing that the ouptput had poor demographic parity.
+            #
+            # test_df['y'] = y_test
+            test_df['y'] = clf.predict(X_test)
+            clf_pol = compute_optimal_policy(
+                clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
+                clf=clf,
+                x_cols=x_cols,
+                obj_set=obj_set,
+                reward_weights=reward_weights,
+                skip_error_terms=True,
+                method=exp_info['METHOD'],
+                min_freq_fill_pct=exp_info['MIN_FREQ_FILL_PCT'],
+            )
+
+            ##
+            # Measure and record the error of the learned policy, and keep it as
+            # a negative training example for next IRL Loop iteration.
+            ##
+
+            # Compute feature expectations of the learned policy
+            logging.debug('\tGenerating learned demostration...')
+            demo = generate_demo(clf_pol, X_test, y_test, can_observe_y=CAN_OBSERVE_Y)
+            demo_hold = generate_demo(clf_pol, X_hold, y_hold, can_observe_y=False)
+            demo_history.append(demo)
+            demo_hold_history.append(demo_hold)
+            muj = obj_set.compute_demo_feature_exp(demo)
+            muj_hold = obj_set.compute_demo_feature_exp(demo_hold)
+            mu_history.append(muj)
+            mu_hold_history.append(muj_hold)
+            logging.info(f"\t\t muL[{i}] = {np.round(muj, 3)}")
+            logging.debug(f"\t\t muL_hold[{i}] = {np.round(muj_hold, 3)}")
+
+            # Append policy's feature expectations to irl clf dataset
+            X_irl_learn_i = pd.DataFrame(np.array([muj]), columns=obj_set_cols)
+            y_irl_learn_i = pd.Series(np.zeros(1), dtype=int)
+            X_irl_learn = pd.concat([X_irl_learn, X_irl_learn_i], axis=0)
+            y_irl_learn = pd.concat([y_irl_learn, y_irl_learn_i], axis=0)
+
+            # Compute error of the learned policy: t[i] = wT(muE-mu[j])
+            # This is equivalent to computing the SVM margin.
+            ti, best_j, mu_delta, mu_delta_l2norm = irl_error(
+                wi,
+                muE,
+                mu_history,
+                norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'],
+            )
+            # Do it for the hold-out set as well.
+            ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(
+                wi,
+                muE_hold,
+                mu_hold_history,
+                norm_weights=exp_info['IRL_ERROR_NORM_WEIGHTS'],
+            )
+            mu_best_history.append(mu_history[best_j])
+            mu_best_hold_history.append(mu_hold_history[best_j])
+            t.append(ti)
+            t_hold.append(ti_hold)
+            mu_delta_l2norm_hist.append(mu_delta_l2norm)
+            mu_delta_l2norm_hold_hist.append(mu_delta_l2norm_hold)
+            logging.info(f"\t\t mu_delta[{i}] \t= {np.round(mu_delta, 3)}")
+            logging.debug(f"\t\t mu_delta_hold[i] \t= {np.round(mu_delta_hold, 3)}")
+            logging.info(f"\t\t t[{i}] \t\t= {t[i]:.5f}")
+            logging.debug(f"\t\t t_hold[i] \t\t= {t_hold[i]:.5f}")
+            logging.info(f"\t\t weights[{i}] \t= {np.round(weights[i], 3)}")
+
+            ## Show a summary of the learned policy
+            # logging.info(
+            #     df_to_log(
+            #         (
+            #             demo.groupby(['z']+x_cols+['y', 'yhat'])
+            #             [['age']].agg(['count'])
+            #         ),
+            #         title='\tLearned Policy:',
+            #         tab_level=3,
+            #     )
+            # )
+
+            if i >= exp_info['MAX_ITER'] - 1:
+                if exp_info['IRL_METHOD'] == 'FairIRLFO':
+                    converged = True
+                else:
+                    converged = False
+                    logging.info(f"\nIRL loop did not converge. Resetting.")
+                break
+
+            # 2nd clause ensures no negative weights
+            if ti < exp_info['EPSILON'] and np.all(wi > -1e-5) and ti <= min(t):
+                converged = True
+                break
+
+            i += 1
+
+            # End IRL Loop
 
     ##
     # Book keeping stuff for the trial.
@@ -818,7 +844,7 @@ def run_trial_source_domain(
         plt.suptitle(f"Best learned weights: {best_weight.round(2)}")
         plt.tight_layout()
 
-    # End regular IRL trial
+        # End regular IRL trial
 
     return muE, muE_hold, df_irl, weights, t_hold
 
@@ -1084,7 +1110,8 @@ def run_experiment(
 
 def plot_results_source_domain_only(
     objective_set_names,
-    expert_algo, dataset,
+    expert_algos,
+    dataset,
     mu_noise_factor=0,
     w_noise_factor=0,
     mu_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
@@ -1098,152 +1125,224 @@ def plot_results_source_domain_only(
     extra_title=None,
     min_exp_timestamp=None,
     max_exp_timestamp=None,
+    min_mu_value=None,
+    max_mu_value=None,
+    min_w_value=None,
+    mu_yticks=[.4, .5, .6, .7, .8, .9, 1],
+    w_yticks = [-.2, 0, .2, .4, .6, .8, 1],
+    mu_ylim=(0, 1.05),
+    w_ylim=(-.5, 1.05),
+    mu_whis=[5, 95],
+    w_whis=[5, 95],
 ):
-    # Construct a pivot table so we can do a seaborn boxplot
-    mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
-    mu_rows = []
-    w_cols = ['Value', 'IRL Method', 'Weight']
-    w_rows = []
-
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
     exp_info_files = sorted(os.listdir(f"{path_prefix}/exp_info/"))
 
-    # For each experiment...
-    for (result_file, info_file) in zip(exp_results_files, exp_info_files):
-        if result_file.replace('csv', '') != info_file.replace('json', ''):
-            raise ValueError(
-                f"Mismatched number of results and info files. "
-                f"{result_file}, {info_file}"
-            )
-
-        # Filter out any unwanted experiments
-        if min_exp_timestamp is not None and info_file < min_exp_timestamp:
-            continue
-        if max_exp_timestamp is not None and info_file > max_exp_timestamp:
-            continue
-
-        result = pd.read_csv(
-            f"{path_prefix}/exp_results/{result_file}",
-            index_col=None,
-        )
-        info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
-
-        # Filter to only experiments for the input `expert_algo`
-        if (
-            info['EXPERT_ALGO'] != expert_algo
-            or info['DATASET'] != dataset
-            or set(info['OBJECTIVE_NAMES']) != set(objective_set_names)
-            or info['IRL_METHOD'] in irl_methods_to_exclude
-            or extra_skip_conditions(info)
-        ):
-            continue
-
-        for idx, row in result.iterrows():
-            # Append muE and muL results
-            for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([
-                    row[f"muE_hold_{obj_name}_mean"],
-                    'muE',
-                    obj_name,
-                ])
-            for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([
-                    row[f"muL_best_hold_{obj_name}"],
-                    f"muL ({info['IRL_METHOD']})",
-                    obj_name,
-                ])
-                w_rows.append([
-                    row[f"wL_{obj_name}"],
-                    f"wL ({info['IRL_METHOD']})",
-                    obj_name,
-                ])
-
-    if len(mu_rows) == 0:
-        raise ValueError(f"No experimets with EXPERT_ALGO={expert_algo}")
-
-    mu_df = pd.DataFrame(mu_rows, columns=mu_cols)
-    mu_df['Value'] += mu_noise_factor*(np.random.rand(len(mu_df)) - .5)
-    mu_df['Value'] = mu_df['Value'].clip(0, 1)
-    w_df = pd.DataFrame(w_rows, columns=w_cols)
-    w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
-
-    mu_df['Demo Producer'] = (
-        mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E$')
-    )
-    mu_df['Demo Producer'] = (
-        mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
-    )
-    w_df['IRL Method'] = (
-        w_df['IRL Method'].str.replace('wL', r'$w^L$')
-    )
-
-    mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E$')
-    mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
-    w_hue_order = pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
-
-    # Plot boxplot for feature expectations
-    fig, (ax1, ax2) = plt.subplots(
+    n_exp = len(expert_algos)
+    fig, axes = plt.subplots(
         2,
-        1,
-        figsize=(5, 8.5),
-        height_ratios=[2,1.33],
-    )
-    sns.boxplot(
-        x=mu_df['Feature Expectation'],
-        y=mu_df['Value'],
-        hue=mu_df['Demo Producer'],
-        hue_order=mu_hue_order,
-        ax=ax1,
-        fliersize=0,  # Remove outliers
-        saturation=1,
-        palette=list(cp[0:3])+ list(cp[6:]),
-    )
-    ax1.set_ylabel(None)
-    ax1.set_xlabel('Learned Feature Expectations')
-    ax1.legend(
-        title=None,
-        # fontsize=18,
-        loc='lower left',
-    )
-    ax1.set_ylim([-.1,1.1])
-
-    # Plot boxplot for weights
-    sns.boxplot(
-        x=w_df['Weight'],
-        y=w_df['Value'],
-        hue=w_df['IRL Method'],
-        hue_order=w_hue_order,
-        ax=ax2,
-        fliersize=0,  # Remove outliers
-        saturation=1,
-        palette=list(cp[0:3])+ list(cp[6:]),
-    )
-    ax2.set_ylabel(None)
-    ax2.set_xlabel('Learned Weights')
-    ax2.set_ylim([-1, 1])
-    ax2.legend(
-        title=None,
-        loc='lower left',
-        # fontsize=18,
+        n_exp,
+        figsize=(2.1*n_exp, 6),
+        height_ratios=[1,1],
     )
 
-    # Set title on top of fig 1
-    title = f"Expert Algo: {expert_algo}"
-    if extra_title is not None:
-        title += f"\n{extra_title}"
-    title += f"\n{28*'-'}"
-    ax1.set_title(title)
+    mu_dfs = []
+    w_dfs = []
+
+    for exp_i, expert_algo in enumerate(expert_algos):
+
+        if n_exp == 1:
+            ax1 = axes[0]
+            ax2 = axes[1]
+        else:
+            ax1 = axes[0][exp_i]
+            ax2 = axes[1][exp_i]
+
+        # Construct a pivot table so we can do a seaborn boxplot
+        mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
+        mu_rows = []
+        w_cols = ['Value', 'IRL Method', 'Weight']
+        w_rows = []
+
+        # For each experiment...
+        for (result_file, info_file) in zip(exp_results_files, exp_info_files):
+            if result_file.replace('csv', '') != info_file.replace('json', ''):
+                raise ValueError(
+                    f"Mismatched number of results and info files. "
+                    f"{result_file}, {info_file}"
+                )
+
+            # Filter out any unwanted experiments
+            if min_exp_timestamp is not None and info_file < min_exp_timestamp:
+                continue
+            if max_exp_timestamp is not None and info_file > max_exp_timestamp:
+                continue
+
+            result = pd.read_csv(
+                f"{path_prefix}/exp_results/{result_file}",
+                index_col=None,
+            )
+            info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
+
+            # Filter to only experiments for the input `expert_algo`
+            if (
+                info['EXPERT_ALGO'] != expert_algo
+                or info['DATASET'] != dataset
+                or set(info['OBJECTIVE_NAMES']) != set(objective_set_names)
+                or info['IRL_METHOD'] in irl_methods_to_exclude
+                or extra_skip_conditions(info)
+            ):
+                continue
+
+            for idx, row in result.iterrows():
+                # Append muE and muL results
+                for obj_name in info['OBJECTIVE_NAMES']:
+                    mu_rows.append([
+                        row[f"muE_hold_{obj_name}_mean"],
+                        'muE',
+                        obj_name,
+                    ])
+                for obj_name in info['OBJECTIVE_NAMES']:
+                    mu_rows.append([
+                        row[f"muL_best_hold_{obj_name}"],
+                        f"muL ({info['IRL_METHOD']})",
+                        obj_name,
+                    ])
+                    w_rows.append([
+                        row[f"wL_{obj_name}"],
+                        f"wL ({info['IRL_METHOD']})",
+                        obj_name,
+                    ])
+
+        if len(mu_rows) == 0:
+            raise ValueError(f"No experimets with EXPERT_ALGO={expert_algo}")
+
+        mu_df = pd.DataFrame(mu_rows, columns=mu_cols)
+        mu_df['Value'] += mu_noise_factor*(np.random.rand(len(mu_df)) - .5)
+        mu_df['Value'] = mu_df['Value'].clip(0, 1)
+        w_df = pd.DataFrame(w_rows, columns=w_cols)
+        w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
+
+        mu_dfs.append(mu_df.copy())
+        w_dfs.append(w_df.copy())
+
+
+        mu_df['Demo Producer'] = (
+            mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E$')
+        )
+        mu_df['Demo Producer'] = (
+            mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+        )
+        w_df['IRL Method'] = (
+            w_df['IRL Method'].str.replace('wL', r'$w^L$')
+        )
+
+        mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E$')
+        mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
+        w_hue_order = pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
+
+        if min_mu_value is not None:
+            mu_df = mu_df.query('Value >= @min_mu_value')
+        if max_mu_value is not None:
+            mu_df = mu_df.query('Value <= @max_mu_value')
+
+        if min_w_value is not None:
+            w_df = w_df.query('Value >= @min_w_value')
+
+        # Plot boxplot for feature expectations
+        sns.boxplot(
+            x=mu_df['Feature Expectation'],
+            y=mu_df['Value'],
+            hue=mu_df['Demo Producer'],
+            hue_order=mu_hue_order,
+            ax=ax1,
+            fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list(cp[0:3])+ list(cp[6:]),
+            linewidth=.5,
+            whis=mu_whis,
+        )
+        ax1.set_ylabel(None)
+        ax1.set_xlabel('Feature Expectations')
+
+        if exp_i == len(expert_algos)-1:
+            ax1.legend(
+                title=None,
+                ncol=3,
+                loc='lower left',
+                labelspacing=0,
+                columnspacing=1.5,
+                bbox_to_anchor=(-1.7, -.65),
+            )
+        else:
+            ax1.get_legend().remove()
+
+        ax1.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax1.set_yticks(mu_yticks)
+        ax1.set_ylim(mu_ylim)
+
+        if exp_i == 0:
+            ax1.set_yticklabels(mu_yticks)
+        else:
+            ax1.set_yticklabels([])
+
+        # Plot boxplot for weights
+        sns.boxplot(
+            x=w_df['Weight'],
+            y=w_df['Value'],
+            hue=w_df['IRL Method'],
+            hue_order=w_hue_order,
+            ax=ax2,
+            fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list(cp[0:3])+ list(cp[6:]),
+            linewidth=.5,
+            whis=w_whis,
+        )
+        ax2.set_ylabel(None)
+        ax2.set_xlabel('Learned Weights')
+
+        if exp_i == len(expert_algos)-1:
+            ax2.legend(
+                title=None,
+                ncol=2,
+                loc='lower left',
+                labelspacing=.1,
+                columnspacing=.5,
+                bbox_to_anchor=(-1.45, -.65),
+            )
+        else:
+            ax2.get_legend().remove()
+
+        ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax2.set_yticks(w_yticks)
+        ax2.set_ylim(w_ylim)
+
+        if exp_i == 0:
+            ax2.set_yticklabels(w_yticks)
+        else:
+            ax2.set_yticklabels([])
+
+
+        # Set title on top of fig 1
+        title = f"Expert: {expert_algo}"
+        if extra_title is not None:
+            title += f"\n{extra_title}"
+        # title += f"\n{28*'-'}"
+        ax1.set_title(title)
+        ax2.set_title(title)
 
     plt.tight_layout()
+    plt.subplots_adjust(wspace=.03, hspace=.9)
 
     print(f"DATASET: {dataset}")
 
-    return mu_df, w_df
+    return fig, axes, mu_dfs, w_dfs
 
 
 def plot_results_target_domain(
-    objective_set_names, expert_algo, source_dataset, target_dataset,
+    objective_set_names, expert_algos, source_dataset, target_dataset,
     mu_noise_factor=0,
     w_noise_factor=0,
     mu_hue_order=[
@@ -1268,185 +1367,188 @@ def plot_results_target_domain(
     extra_skip_conditions=(lambda info: False),
     min_exp_timestamp=None,
     max_exp_timestamp=None,
+    min_mu_value=None,
+    mu_yticks=[.4, .5, .6, .7, .8, .9, 1],
+    mu_ylim=(0, 1.05),
+    mu_whis=[5, 95],
 ):
-    # Construct a pivot table so we can do a seaborn boxplot
-    mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
-    mu_rows = []
-    w_cols = ['Value', 'IRL Method', 'Weight']
-    w_rows = []
-
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
     exp_info_files = sorted(os.listdir(f"{path_prefix}/exp_info/"))
 
-    # For each experiment...
-    for (result_file, info_file) in zip(exp_results_files, exp_info_files):
-        if result_file.replace('csv', '') != info_file.replace('json', ''):
-            raise ValueError(
-                f"Mismatched number of results and info files. "
-                f"{result_file}, {info_file}"
+    # Plot boxplot for feature expectations
+    n_exp = len(expert_algos)
+    fig, axes = plt.subplots(
+        1,
+        n_exp,
+        figsize=(2.4*n_exp, 2.2),
+    )
+
+    for exp_i, expert_algo in enumerate(expert_algos):
+
+        if n_exp == 1:
+            ax1 = axes
+        else:
+            ax1 = axes[exp_i]
+
+        # Construct a pivot table so we can do a seaborn boxplot
+        mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
+        mu_rows = []
+        w_cols = ['Value', 'IRL Method', 'Weight']
+        w_rows = []
+
+        # For each experiment...
+        for (result_file, info_file) in zip(exp_results_files, exp_info_files):
+            if result_file.replace('csv', '') != info_file.replace('json', ''):
+                raise ValueError(
+                    f"Mismatched number of results and info files. "
+                    f"{result_file}, {info_file}"
+                )
+
+            # Filter out any unwanted experiments
+            if min_exp_timestamp is not None and info_file < min_exp_timestamp:
+                continue
+            if max_exp_timestamp is not None and info_file > max_exp_timestamp:
+                continue
+
+            result = pd.read_csv(
+                f"{path_prefix}/exp_results/{result_file}",
+                index_col=None,
+            )
+            info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
+
+            # Filter to only experiments for the input `expert_algo`
+            if (
+                info['EXPERT_ALGO'] != expert_algo
+                or info['DATASET'] != source_dataset
+                or info['TARGET_DATASET'] != target_dataset
+                or set(info['OBJECTIVE_NAMES']) != set(objective_set_names)
+                or info['IRL_METHOD'] in irl_methods_to_exclude
+                or extra_skip_conditions(info)
+            ):
+                continue
+
+            for idx, row in result.iterrows():
+                # Append muE and muL results
+                for obj_name in info['OBJECTIVE_NAMES']:
+                    mu_rows.append([
+                        row[f"muE_hold_{obj_name}_mean"],
+                        'muE',
+                        obj_name,
+                    ])
+                    if f"muE_target_{obj_name}" in row:
+                        mu_rows.append([
+                            row[f"muE_target_{obj_name}"],
+                            'muE_target',
+                            obj_name,
+                        ])
+                        mu_rows.append([
+                            row[f"muL_target_hold_{obj_name}"],
+                            'muL_target' + ' ' + info['IRL_METHOD'],
+                            obj_name,
+                        ])
+                for obj_name in info['OBJECTIVE_NAMES']:
+                    mu_rows.append([
+                        row[f"muL_best_hold_{obj_name}"],
+                        f"muL ({info['IRL_METHOD']})",
+                        obj_name,
+                    ])
+                    w_rows.append([
+                        row[f"wL_{obj_name}"],
+                        f"wL ({info['IRL_METHOD']})",
+                        obj_name,
+                    ])
+
+        if len(mu_rows) == 0:
+            raise ValueError(f"No experimets with EXPERT_ALGO={expert_algo}")
+
+        mu_df = pd.DataFrame(mu_rows, columns=mu_cols)
+        mu_df['Value'] += mu_noise_factor*(np.random.rand(len(mu_df)) - .5)
+        mu_df['Value'] = mu_df['Value'].clip(0, 1)
+        mu_df = mu_df[
+            mu_df['Demo Producer'].str.contains('muE')
+            | mu_df['Demo Producer'].str.contains('muL_target')
+        ]
+
+
+        w_df = pd.DataFrame(w_rows, columns=w_cols)
+        w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
+        mu_df['Demo Producer'] = (
+            mu_df['Demo Producer'].str.replace('muE_target', r'$\\mu^E_{TARGET}$')
+        )
+        mu_df['Demo Producer'] = (
+            mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E_{SOURCE}$')
+        )
+        mu_df['Demo Producer'] = (
+            mu_df['Demo Producer'].str.replace('muL_target', r'$\\mu^L_{TARGET}$')
+        )
+        mu_df['Demo Producer'] = (
+            mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+        )
+        mu_hue_order = (
+            pd.Series(mu_hue_order).str.replace('muE_target', r'$\\mu^E_{TARGET}$')
+        )
+        mu_hue_order = (
+            pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E_{SOURCE}$')
+        )
+        mu_hue_order = (
+            pd.Series(mu_hue_order).str.replace('muL_target', r'$\\mu^L_{TARGET}$')
+        )
+        mu_hue_order = (
+            pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
+        )
+        w_df['IRL Method'] = (
+            w_df['IRL Method'].str.replace('wL', r'$w^L$')
+        )
+        w_hue_order = (
+            pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
+        )
+
+        if min_mu_value is not None:
+            mu_df = mu_df.query('Value >= @min_mu_value')
+
+        mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
+        w_df = w_df.sort_values(['Weight', 'IRL Method'])
+
+        sns.boxplot(
+            x=mu_df['Feature Expectation'],
+            y=mu_df['Value'],
+            hue=mu_df['Demo Producer'],
+            # hue_order=mu_hue_order,
+            ax=ax1,
+            fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list([(.6,.6,.6)]) + list(cp[0:3]),
+            boxprops=dict(alpha=1),
+            linewidth=.7,
+            whis=mu_whis,
+        )
+        ax1.set_xlabel('Feature Expectations')
+        ax1.get_legend().remove()
+        if exp_i == len(expert_algos)-1:
+            ax1.legend(
+                title=None,
+                ncol=4,
+                loc='lower left',
+                labelspacing=0,
+                columnspacing=1.5,
+                bbox_to_anchor=(-2.2, -.55),
             )
 
-        # Filter out any unwanted experiments
-        if min_exp_timestamp is not None and info_file < min_exp_timestamp:
-            continue
-        if max_exp_timestamp is not None and info_file > max_exp_timestamp:
-            continue
+        ax1.set_ylabel(None)
+        ax1.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax1.set_yticks(mu_yticks)
+        ax1.set_ylim(mu_ylim)
 
-        result = pd.read_csv(
-            f"{path_prefix}/exp_results/{result_file}",
-            index_col=None,
-        )
-        info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
+        if exp_i == 0:
+            ax1.set_yticklabels(mu_yticks)
+        else:
+            ax1.set_yticklabels([])
 
-        # Filter to only experiments for the input `expert_algo`
-        if (
-            info['EXPERT_ALGO'] != expert_algo
-            or info['DATASET'] != source_dataset
-            or info['TARGET_DATASET'] != target_dataset
-            or set(info['OBJECTIVE_NAMES']) != set(objective_set_names)
-            or info['IRL_METHOD'] in irl_methods_to_exclude
-            or extra_skip_conditions(info)
-        ):
-            continue
+        ax1.set_title(f"Expert: {expert_algo}")
 
-        for idx, row in result.iterrows():
-            # Append muE and muL results
-            for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([
-                    row[f"muE_hold_{obj_name}_mean"],
-                    'muE',
-                    obj_name,
-                ])
-                if f"muE_target_{obj_name}" in row:
-                    mu_rows.append([
-                        row[f"muE_target_{obj_name}"],
-                        'muE_target',
-                        obj_name,
-                    ])
-                    mu_rows.append([
-                        row[f"muL_target_hold_{obj_name}"],
-                        'muL_target' + ' ' + info['IRL_METHOD'],
-                        obj_name,
-                    ])
-            for obj_name in info['OBJECTIVE_NAMES']:
-                mu_rows.append([
-                    row[f"muL_best_hold_{obj_name}"],
-                    f"muL ({info['IRL_METHOD']})",
-                    obj_name,
-                ])
-                w_rows.append([
-                    row[f"wL_{obj_name}"],
-                    f"wL ({info['IRL_METHOD']})",
-                    obj_name,
-                ])
-
-    if len(mu_rows) == 0:
-        raise ValueError(f"No experimets with EXPERT_ALGO={expert_algo}")
-
-    mu_df = pd.DataFrame(mu_rows, columns=mu_cols)
-    mu_df['Value'] += mu_noise_factor*(np.random.rand(len(mu_df)) - .5)
-    mu_df['Value'] = mu_df['Value'].clip(0, 1)
-    mu_df = mu_df[
-        mu_df['Demo Producer'].str.contains('muE')
-        | mu_df['Demo Producer'].str.contains('muL_target')
-    ]
-
-
-    w_df = pd.DataFrame(w_rows, columns=w_cols)
-    w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
-    mu_df['Demo Producer'] = (
-        mu_df['Demo Producer'].str.replace('muE_target', r'$\\mu^E_{TARGET}$')
-    )
-    mu_df['Demo Producer'] = (
-        mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E_{SOURCE}$')
-    )
-    mu_df['Demo Producer'] = (
-        mu_df['Demo Producer'].str.replace('muL_target', r'$\\mu^L_{TARGET}$')
-    )
-    mu_df['Demo Producer'] = (
-        mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
-    )
-    mu_hue_order = (
-        pd.Series(mu_hue_order).str.replace('muE_target', r'$\\mu^E_{TARGET}$')
-    )
-    mu_hue_order = (
-        pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E_{SOURCE}$')
-    )
-    mu_hue_order = (
-        pd.Series(mu_hue_order).str.replace('muL_target', r'$\\mu^L_{TARGET}$')
-    )
-    mu_hue_order = (
-        pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
-    )
-    w_df['IRL Method'] = (
-        w_df['IRL Method'].str.replace('wL', r'$w^L$')
-    )
-    w_hue_order = (
-        pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
-    )
-
-    mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
-    w_df = w_df.sort_values(['Weight', 'IRL Method'])
-
-    # Plot boxplot for feature expectations
-    fig, (ax1, ax2) = plt.subplots(
-        2,
-        1,
-        figsize=(5, 8.5),
-        height_ratios=[2, 1],
-    )
-    sns.boxplot(
-        x=mu_df['Feature Expectation'],
-        y=mu_df['Value'],
-        hue=mu_df['Demo Producer'],
-        # hue_order=mu_hue_order,
-        ax=ax1,
-        fliersize=0,  # Remove outliers
-        saturation=1,
-        palette=list([cp[0]]) + list(cp[3:6]) + list(cp[7:]),
-        boxprops=dict(alpha=1),
-        linewidth=1,
-    )
-    ax1.set_ylabel(None)
-    ax1.set_xlabel('Learned Feature Expectations')
-    ax1.set_ylim([-.1,1.1])
-    ax1.get_legend().remove()
-    ax1.legend(
-        title=None,
-        ncol=2,
-        # fontsize=12,
-        loc='lower left',
-        # bbox_to_anchor=(1.0, -.25),
-    )
-
-    # Plot boxplot for weights
-    sns.boxplot(
-        x=w_df['Weight'],
-        y=w_df['Value'],
-        hue=w_df['IRL Method'],
-        # hue_order=w_hue_order,
-        ax=ax2,
-        fliersize=0,  # Remove outliers
-        saturation=1,
-        boxprops=dict(alpha=1),
-        linewidth=1,
-        palette=list(cp[1:3]) + list(cp[6:]),
-    )
-    ax2.set_ylabel(None)
-    ax2.set_xlabel('Learned Weights')
-    ax2.set_ylim([-1, 1])
-    ax2.get_legend().remove()
-    ax2.legend(
-        title=None,
-        ncol=2,
-        # fontsize=19.5,
-        loc='lower left',
-        # bbox_to_anchor=(.85, -.35),
-     )
-
-    ax1.set_title(f"Expert Algo: {expert_algo}\n{28*'-'}")
     plt.tight_layout()
+    plt.subplots_adjust(wspace=.03, hspace=.5)
 
     print(f"SOURCE DATASET: {source_dataset}")
     print(f"TARGET DATASET: {target_dataset}")
