@@ -621,6 +621,268 @@ class PredictiveEqualityObjective(AbsoluteValueObjective):
         return c
 
 
+class GroupTruePositiveRateZ0Objective(LinearObjective):
+
+    def __init__(self, z=0):
+        self.z = z
+        self.name = f"TPR_Z{self.z}"
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_1_giv_y_eq_1_z_eq_z = (
+            (
+                (demo['yhat'] == 1) & (demo['y'] == 1) & (demo['z'] == self.z)
+            ).sum() / ((demo['y'] == 1) & (demo['z'] == self.z)).sum()
+        )
+
+        mu = p_yhat_eq_1_giv_y_eq_1_z_eq_z
+
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function component for this objective.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y1_z = (
+            (ldf['z'] == self.z) & (ldf['y'] == 1) & (ldf['yhat'] == 1)
+        )
+        p_y1_z = ldf[(ldf['y'] == 1) & (ldf['z'] == self.z)]['mu0'].sum()
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y1_z, 'r'] = 1 / p_y1_z
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class GroupTruePositiveRateZ1Objective(GroupTruePositiveRateZ0Objective):
+
+    def __init__(self):
+        super().__init__(z=1)
+
+
+class GroupTrueNegativeRateZ0Objective(LinearObjective):
+
+    def __init__(self, z=0):
+        self.z = z
+        self.name = f"TNR_Z{self.z}"
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_0_giv_y_eq_0_z_eq_z = (
+            (
+                (demo['yhat'] == 0) & (demo['y'] == 0) & (demo['z'] == self.z)
+            ).sum() / ((demo['y'] == 0) & (demo['z'] == self.z)).sum()
+        )
+
+        mu = p_yhat_eq_0_giv_y_eq_0_z_eq_z
+
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function component for this objective.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat0_giv_y0_z = (
+            (ldf['z'] == self.z) & (ldf['y'] == 0) & (ldf['yhat'] == 0)
+        )
+        p_y0_z = ldf[(ldf['y'] == 0) & (ldf['z'] == self.z)]['mu0'].sum()
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat0_giv_y0_z, 'r'] = 1 / p_y0_z
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class GroupTrueNegativeRateZ1Objective(GroupTrueNegativeRateZ0Objective):
+
+    def __init__(self):
+        super().__init__(z=1)
+
+
+class GroupFalsePositiveRateZ0Objective(LinearObjective):
+
+    def __init__(self, z=0):
+        self.z = z
+        self.name = f"FPR_Z{self.z}"
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_1_giv_y_eq_0_z_eq_z = (
+            (
+                (demo['yhat'] == 1) & (demo['y'] == 0) & (demo['z'] == self.z)
+            ).sum() / ((demo['y'] == 0) & (demo['z'] == self.z)).sum()
+        )
+
+        mu = p_yhat_eq_1_giv_y_eq_0_z_eq_z
+
+        # Absence should imply 0
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function component for this objective.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y0_z = (
+            (ldf['z'] == self.z) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        )
+        p_y0_z = ldf[(ldf['y'] == 0) & (ldf['z'] == self.z)]['mu0'].sum()
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y0_z, 'r'] = 1 / p_y0_z
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class GroupFalsePositiveRateZ1Objective(GroupFalsePositiveRateZ0Objective):
+
+    def __init__(self):
+        super().__init__(z=1)
+
+
+class GroupFalseNegativeRateZ0Objective(LinearObjective):
+
+    def __init__(self, z=0):
+        self.z = z
+        self.name = f"FNR_Z{self.z}"
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_1_giv_y_eq_0_z_eq_z = (
+            (
+                (demo['yhat'] == 1) & (demo['y'] == 0) & (demo['z'] == self.z)
+            ).sum() / ((demo['y'] == 0) & (demo['z'] == self.z)).sum()
+        )
+
+        mu = p_yhat_eq_1_giv_y_eq_0_z_eq_z
+
+        # Absence should imply 0
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function component for this objective.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_y0_z = (
+            (ldf['z'] == self.z) & (ldf['y'] == 0) & (ldf['yhat'] == 1)
+        )
+        p_y0_z = ldf[(ldf['y'] == 0) & (ldf['z'] == self.z)]['mu0'].sum()
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_y0_z, 'r'] = 1 / p_y0_z
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+        return c
+
+
+class GroupFalseNegativeRateZ1Objective(GroupFalseNegativeRateZ0Objective):
+
+    def __init__(self):
+        super().__init__(z=1)
+
+
 class ObjectiveSet():
     """
     The set of all objectives that make up the space of possible objectives in
@@ -756,5 +1018,3 @@ class ObjectiveSet():
             obj.__init__()
 
         self.opt_problems_ = None
-
-

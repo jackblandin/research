@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split, KFold
 
 def compute_optimal_policy(
     clf_df, clf, x_cols, obj_set, reward_weights, skip_error_terms=False,
-    method='highs', gamma = 1e-6, min_freq_fill_pct=0,
+    method='highs', gamma = 1e-9, min_freq_fill_pct=0,
 ):
     """
     Learns the optimal policies from the provided reward weights.
@@ -117,7 +117,10 @@ def generate_demo(clf, X_test, y_test, can_observe_y=False):
 
     if can_observe_y:
         # yhat = clf.predict(X_test, y_test)
-        demo['yhat'] = demo['y'].copy()
+        if 'y' in X_test.columns:
+            demo['yhat'] = demo['y'].copy()
+        else:
+            demo['yhat'] = y_test
     else:
         demo['yhat'] = clf.predict(X_test)
 
@@ -202,7 +205,7 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
     return mu, demos
 
 
-def irl_error(w, muE, muL, norm_weights=False):
+def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weights=False):
     """
     Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
 
@@ -214,8 +217,10 @@ def irl_error(w, muE, muL, norm_weights=False):
         Array of all expert feature expectations.
     muL : array-like<array-like<float>>
         List of all learned feature expectations.
-    norm_weights : bool, default False
+    encourage_small_weights : bool, default False
         If true, divides the error by the l2 norm of the weights.
+    encourage_large_weights : bool, default False
+        If true, multiplies the error by the l2 norm of the weights.
 
     Returns
     -------
@@ -236,20 +241,15 @@ def irl_error(w, muE, muL, norm_weights=False):
     # Find best muj
     for j, muj in enumerate(muL):
         mu_deltas[j] = muE.mean(axis=0) - muj
-        err = np.linalg.norm(w * mu_deltas[j])
-        if norm_weights:
+        err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]))
+        if encourage_small_weights:
             l2_w = np.linalg.norm(w)
             err = err / l2_w
+        elif encourage_large_weights:
+            l2_w = np.linalg.norm(w)
+            err = err * l2_w
         if err < best_err:
             best_err = err
             best_j = j
-
-    # TODO 08/17/2023: double check this is actually doing what we want.
-    # If so, delete the negative weight check on line 693 of
-    # `experiment_utils.py`.
-    if not np.all(w > -1e-5):
-        # Don't allow negative weights to be the best. Use only to help
-        # iterate towards optimal solution.
-        best_err = 1
 
     return best_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]

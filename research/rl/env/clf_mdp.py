@@ -1,5 +1,6 @@
 import itertools
 import logging
+import numbers
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
@@ -152,23 +153,45 @@ class ClassificationMDP:
         # Cache n_states since frequently used in computations
         self.n_states_ = state_counter
 
-        # Compute `b_eq` === `mu0` (initial state probabilities)
+        # Compute `mu0` (initial state probabilities)
         logging.debug('Computing b_eq ...')
-        self.b_eq_ = self.reduced_state_df_['count'] / self.reduced_state_df_['count'].sum()
-        self.reduced_state_df_['mu0'] = self.b_eq_
+        self.reduced_state_df_['mu0'] = self.reduced_state_df_['count'] / self.reduced_state_df_['count'].sum()
         self.reduced_state_df_ = self.reduced_state_df_.drop(columns='count')
-
-        logging.debug(f"n_states: {len(self.b_eq_)}")
-
-        # Compute transition matrix linear equations `A_eq`
-        logging.debug('Computing transition matrix linear equations A_eq ...')
-        self.A_eq_ = self._compute_A_eq(self.b_eq_)
+        logging.debug(f"n_states: {len(self.reduced_state_df_)}")
 
         # Generate the lambda dataframe (state-action indexed)
         logging.debug('Generating the lambda dataframe ...')
-        self.ldf_ = self._generate_lambda_linear_equations()
+        self.ldf_ = self._generate_lambda_linear_equations(self.reduced_state_df_)
+
+        # Compute b_eq, which consists of two parts:
+        #   1: mu0
+        #   2: zeros (for action equality for same y-values)
+        self.b_eq_ = np.concatenate([
+            self.reduced_state_df_['mu0'],  # mu0
+            np.zeros(self.ldf_.groupby(self.x_cols+['z', 'yhat']).size().shape[0]),  # action equality for y
+        ])
+
+        # Compute transition matrix linear equations `A_eq`, which consists of
+        # two parts:
+        #   1: Transition matrix
+        #   2: Action equality for same y-values
+        logging.debug('Computing transition matrix linear equations A_eq ...')
+        self.A_eq_ = self._compute_A_eq(
+            mu0=self.reduced_state_df_['mu0'],
+            ldf=self.ldf_,
+            x_cols=self.x_cols,
+        )
 
         logging.debug('Fitting objectives ...')
+        n_primary_constr = len(self.reduced_state_df_['mu0'])
+        A_eq = np.concatenate([
+            self.A_eq_[0:n_primary_constr],
+            self.A_eq_[n_primary_constr+0:n_primary_constr+2],
+        ])
+        b_eq = np.concatenate([
+            self.b_eq_[0:n_primary_constr],
+            self.b_eq_[n_primary_constr+0:n_primary_constr+2],
+        ])
         self.obj_set.fit(
             reward_weights=reward_weights,
             ldf=self.ldf_,
@@ -201,6 +224,7 @@ class ClassificationMDP:
         best_policies_best_rewards = []
         for subprob in self.opt_problems_:
             opt_pols, opt_rew = _find_all_solutions_lp(
+                n_states=self.n_states_,
                 c=subprob.c,
                 A_eq=subprob.A_eq,
                 b_eq=subprob.b_eq,
@@ -225,41 +249,105 @@ class ClassificationMDP:
 
         return opt_pols
 
-    def _compute_A_eq(self, b_eq):
+    def _compute_A_eq(self, mu0, ldf, x_cols):
         """
+        Constructs two sets of linear equation constraints.
+
+        1st set: transition matrix
+        --------------------------
         Constructs a set of linear equations representing the state-action
         transition probabilities  where all "states" (classification dataset
         samples) have the initial state probability, regardless of the action
         taken.
-        "Classification MDP".
+
+        2nd set: require equal actions for same `y`
+        -------------------------------------------
+        # Construct constraints that require equal actions for the same `y`
+        # value. This constraint helps the optimizer learn policies that are
+        # robust to incorrect predictions of `y`. This was causing problems
+        # when trying to optimize for fairness constraints like EqOpp that
+        # require knowledge of the `y` value.
+
+        Parameters
+        ----------
+        mu0 : 1-D array
+            Initial state probabilities.
+        ldf : pd.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+        x_cols : list<str>
+            The columns that are used in the state (along with `z` and `y`).
 
         Returns
         -------
         A_eq_
         """
-        n_states = len(b_eq)
+        ldf_mu0 = ldf.copy()
+        ldf = ldf.copy().drop(columns='mu0')
+
+        # Construct constraints that correspond to transition matrix.
+        n_states = len(mu0)
         n_actions = 2
-        A_eq = np.zeros((n_states, n_states*n_actions))
+        A_eq1 = np.zeros((n_states, n_states*n_actions))
         for s in range(n_states):
             for sp in range(n_states):
                 for a in range(n_actions):
                     if s == sp:
-                        A_eq[s][sp*n_actions+a] = 1 - self.gamma*b_eq[sp]
+                        A_eq1[s][sp*n_actions+a] = 1 - self.gamma*mu0[sp]
                     else:
-                        A_eq[s][sp*n_actions+a] = 0 - self.gamma*b_eq[sp]
+                        A_eq1[s][sp*n_actions+a] = 0 - self.gamma*mu0[sp]
+
+        # Construct constraints that require equal actions for the same `y`
+        # value. This constraint helps the optimizer learn policies that are
+        # robust to incorrect predictions of `y`. This was causing problems
+        # when trying to optimize for fairness constraints like EqOpp that
+        # require knowledge of the `y` value.
+
+        # For each, x, a combination:
+        #   Add constraint that x,y0,a == x,y1,a
+        n_constr = ldf.groupby(x_cols+['z', 'yhat']).size().shape[0]
+        A_eq2 = np.zeros((n_constr, len(ldf)))
+
+        group_i = 0
+        for cols, group in ldf.groupby(x_cols+['z', 'yhat']):
+            assert len(group) <= 2
+
+            if len(group) == 1:
+                continue
+
+            constr = np.zeros_like(ldf.index)
+            locy0 = group.index[0]
+            locy1 = group.index[1]
+            _group = group[x_cols+['z']]
+            # Find the mu0 values for each x, a group
+            locy0_mu0 = ldf_mu0[(ldf_mu0[x_cols+['z', 'y']] == list(_group.iloc[0].values)+[0]).sum(axis=1) == len(x_cols)+2]['mu0']
+            locy1_mu0 = ldf_mu0[(ldf_mu0[x_cols+['z', 'y']] == list(_group.iloc[0].values)+[1]).sum(axis=1) == len(x_cols)+2]['mu0']
+            assert len(locy0_mu0) == 2
+            assert len(locy1_mu0) == 2
+            locy0_mu0 = locy0_mu0.values[0]
+            locy1_mu0 = locy1_mu0.values[0]
+            constr[locy0] = 1 * locy1_mu0
+            constr[locy1] = -1 * locy0_mu0
+
+            A_eq2[group_i] = constr
+            group_i += 1
+
+        # Combine the two constraint matrices
+        A_eq = np.concatenate([A_eq1, A_eq2])
+
         return A_eq
 
-    def _generate_lambda_linear_equations(self):
+    def _generate_lambda_linear_equations(self, reduced_state_df):
         """
         TODO
         """
-        state_df = self.reduced_state_df_.copy()
+        state_df = reduced_state_df.copy()
         # Set every two rows the same. One for each action.
         ldf = pd.concat([state_df, state_df], axis=0).reset_index(drop=True)
         ldf = ldf.sort_values(list(ldf.columns))
         yhat = np.zeros(len(ldf), dtype=int)
         yhat[1::2] = 1  # Makes 'a' 0, 1 repeating sequence
         ldf['yhat'] = yhat
+        ldf = ldf.reset_index(drop=True)
         return ldf
 
 
@@ -316,7 +404,7 @@ def _find_best_policies_from_multiple_opt_problems(best_policies_best_rewards):
 
 
 def _find_all_solutions_lp(
-        c, A_eq, b_eq, A_ub=None, b_ub=None, error_term=1e-12, skip_error_terms=False, method='highs'):
+        n_states, c, A_eq, b_eq, A_ub=None, b_ub=None, error_term=1e-12, skip_error_terms=False, method='highs'):
     """
     Wrapper around scipy.optimize.linprog that finds ALL optimal solutions
     by iteratively solving the LP problem after adding/subtracting an "error"
@@ -324,6 +412,8 @@ def _find_all_solutions_lp(
 
     Parameters
     ----------
+    n_states = int
+        Number of states.
     c : 1-D array
         The coefficients of the linear objective function to be minimized.
     A_eq : 2-D array
@@ -356,11 +446,16 @@ def _find_all_solutions_lp(
     """
     best_policies = []
     best_reward = -1*np.inf
-    n_states = len(b_eq)
     n_actions = 2
 
     if skip_error_terms:
-        res = linprog(c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+
+        if A_ub is None or len(A_ub) == 0:
+            assert(b_ub is None or len(b_ub) == 0)
+            res = linprog(c, A_eq=A_eq, b_eq=b_eq)
+        else:
+            res = linprog(c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+
         best_reward = -1*res.fun
         pi_opt = np.zeros(n_states, dtype=int)
         for s in range(n_states):
@@ -436,8 +531,3 @@ def _is_pol_in_pols(pol, policies):
         if np.array_equal(p, pol):
             return True
     return False
-
-
-def _compute_accuracy(df, yhat_col):
-    acc = (df['y'] == df[yhat_col]).mean()
-    return acc
