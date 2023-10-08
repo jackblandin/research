@@ -647,7 +647,7 @@ def run_trial_source_domain(
         try:
             allow_pos_weights = not exp_info['ALLOW_NEG_WEIGHTS']
             alpha = np.random.rand()
-            if alpha < .5:
+            if alpha < .33:
                 logging.info('alpha < .5: taking random sample')
                 pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].sample(2).index
                 neg_idx = X_irl[exp_info['N_EXPERT_DEMOS']:].sample(2).index
@@ -687,8 +687,8 @@ def run_trial_source_domain(
         # giving weights [0, 1, 0] into the run_trial_source_domain and
         # noticing that the ouptput had poor demographic parity.
         #
-        test_df['y'] = y_test
-        # test_df['y'] = clf.predict(X_test)
+        # test_df['y'] = y_test
+        test_df['y'] = clf.predict(X_test)
         clf_pol = compute_optimal_policy(
             clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
             clf=clf,
@@ -698,6 +698,7 @@ def run_trial_source_domain(
             skip_error_terms=True,
             method=exp_info['METHOD'],
             min_freq_fill_pct=exp_info['MIN_FREQ_FILL_PCT'],
+            restrict_y=exp_info['RESTRICT_Y_ACTION'],
         )
 
         ##
@@ -1076,6 +1077,7 @@ def run_trial_target_domain(
         skip_error_terms=True,
         method=exp_info['METHOD'],
         min_freq_fill_pct=exp_info['MIN_FREQ_FILL_PCT'],
+        restrict_y=exp_info['RESTRICT_Y_ACTION'],
     )
 
     # Compute feature expectations of the learned policy

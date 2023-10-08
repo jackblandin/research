@@ -203,9 +203,14 @@ def generate_compas_dataset(
       )
     )
 
-    # Balance the positive and negative classes
-    # rus = RandomUnderSampler(sampling_strategy=.5)
-    # X, y = rus.fit_resample(X, y)
+    # # Balance the two protected groups
+    # # Split into inputs and target variables
+    # z = df['z']
+    # X = df.copy().drop(columns=[z_col])
+    # rus = RandomUnderSampler(sampling_strategy=1)
+    # X, z = rus.fit_resample(X, z)
+    # df = X.copy()
+    # df['z'] = z
 
     quantile_features = []
     for cont_feat in [

@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split, KFold
 
 def compute_optimal_policy(
     clf_df, clf, x_cols, obj_set, reward_weights, skip_error_terms=False,
-    method='highs', gamma = 1e-9, min_freq_fill_pct=0,
+    method='highs', gamma = 1e-9, min_freq_fill_pct=0, restrict_y=True,
 ):
     """
     Learns the optimal policies from the provided reward weights.
@@ -51,6 +51,9 @@ def compute_optimal_policy(
     min_freq_fill_pct, float, range[0, 1), default 0
         Minimum frequency for each input variable to not get replaced by a
         default value.
+    restrict_y : bool, deafult True
+        If True, policy must have same action for any x,z combo, regardless
+        of y.
 
     Returns
     -------
@@ -68,6 +71,7 @@ def compute_optimal_policy(
         reward_weights=reward_weights,
         clf_df=clf_df,
         min_freq_fill_pct=min_freq_fill_pct,
+        restrict_y=restrict_y,
     )
 
     # Compute the optimal policy(s). This does NOT fit the classifier that
@@ -218,9 +222,9 @@ def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weight
     muL : array-like<array-like<float>>
         List of all learned feature expectations.
     encourage_small_weights : bool, default False
-        If true, divides the error by the l2 norm of the weights.
-    encourage_large_weights : bool, default False
         If true, multiplies the error by the l2 norm of the weights.
+    encourage_large_weights : bool, default False
+        If true, divides the error by the l2 norm of the weights.
 
     Returns
     -------
@@ -233,21 +237,53 @@ def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weight
     l2_mu_delta[best_j] : float
         The l2 norm of the muE and muL deltas.
     """
+    mu_deltas = None
+    l2_mu_deltas = None
+    best_err = None
+    best_j = None
+
+    # New as of 10/07/2023.
+    # Helps when there's variance in expert behavior.
+    # Compute the error w.r.t. each expert demo, and return the largest error.
+    # worst_exp_err = 0
+    # for _muE in muE:
+    #     mu_deltas = np.zeros((len(muL), muE.shape[1]))
+    #     l2_mu_deltas = np.zeros(len(muL))
+    #     best_err = np.inf
+    #     best_j = None
+    #     # Find best muj
+    #     for j, muj in enumerate(muL):
+    #         mu_deltas[j] = _muE - muj
+    #         err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=4)
+    #         if encourage_small_weights:
+    #             smallest_w = min(np.abs(w))
+    #             err = err / (1-smallest_w)
+    #         elif encourage_large_weights:
+    #             l2_w = np.linalg.norm(w)
+    #             err = err / l2_w
+    #         if err < best_err:
+    #             best_err = err
+    #             best_j = j
+
+    #     if best_err > worst_exp_err:
+    #         worst_exp_err = best_err
+
+    # return worst_exp_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]
+
     mu_deltas = np.zeros((len(muL), muE.shape[1]))
     l2_mu_deltas = np.zeros(len(muL))
     best_err = np.inf
     best_j = None
-
     # Find best muj
     for j, muj in enumerate(muL):
         mu_deltas[j] = muE.mean(axis=0) - muj
-        err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]))
+        err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=8)
         if encourage_small_weights:
-            l2_w = np.linalg.norm(w)
-            err = err / l2_w
+            smallest_w = min(np.abs(w))
+            err = err / (1-smallest_w)
         elif encourage_large_weights:
             l2_w = np.linalg.norm(w)
-            err = err * l2_w
+            err = err / l2_w
         if err < best_err:
             best_err = err
             best_j = j
