@@ -647,10 +647,9 @@ def run_trial_source_domain(
         try:
             allow_pos_weights = not exp_info['ALLOW_NEG_WEIGHTS']
             alpha = np.random.rand()
-            if alpha < .33:
-                logging.info('alpha < .5: taking random sample')
-                pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].sample(2).index
-                neg_idx = X_irl[exp_info['N_EXPERT_DEMOS']:].sample(2).index
+            if alpha < 1:
+                pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].index
+                neg_idx = X_irl[-5:].index
                 _X_irl = pd.concat([X_irl.loc[pos_idx], X_irl.loc[neg_idx]])
                 _y_irl = pd.concat([y_irl.loc[pos_idx], y_irl.loc[neg_idx]])
             else:
@@ -687,8 +686,8 @@ def run_trial_source_domain(
         # giving weights [0, 1, 0] into the run_trial_source_domain and
         # noticing that the ouptput had poor demographic parity.
         #
-        # test_df['y'] = y_test
-        test_df['y'] = clf.predict(X_test)
+        test_df['y'] = y_test
+        # test_df['y'] = clf.predict(X_test)
         clf_pol = compute_optimal_policy(
             clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
             clf=clf,
@@ -733,16 +732,18 @@ def run_trial_source_domain(
             wi,
             muE,
             mu_history,
-            encourage_small_weights=exp_info['IRL_ERROR_ENCOURAGE_SMALL_WEIGHTS'],
-            encourage_large_weights=exp_info['IRL_ERROR_ENCOURAGE_LARGE_WEIGHTS'],
+            dot_weights_feat_exp=exp_info['DOT_WEIGHTS_FEAT_EXP'],
+            encourage_even_weights=exp_info['IRL_ERROR_ENCOURAGE_EVEN_WEIGHTS'],
+            encourage_uneven_weights=exp_info['IRL_ERROR_ENCOURAGE_UNEVEN_WEIGHTS'],
         )
         # Do it for the hold-out set as well.
         ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(
             wi,
             muE_hold,
             mu_hold_history,
-            encourage_small_weights=exp_info['IRL_ERROR_ENCOURAGE_SMALL_WEIGHTS'],
-            encourage_large_weights=exp_info['IRL_ERROR_ENCOURAGE_LARGE_WEIGHTS'],
+            dot_weights_feat_exp=exp_info['DOT_WEIGHTS_FEAT_EXP'],
+            encourage_even_weights=exp_info['IRL_ERROR_ENCOURAGE_EVEN_WEIGHTS'],
+            encourage_uneven_weights=exp_info['IRL_ERROR_ENCOURAGE_UNEVEN_WEIGHTS'],
         )
         mu_best_history.append(mu_history[best_j])
         mu_best_hold_history.append(mu_hold_history[best_j])
@@ -769,8 +770,16 @@ def run_trial_source_domain(
             if (exp_info['ALLOW_NEG_WEIGHTS'] or np.all(wi > -1e-5)):
                 done = True
                 break
-
-        i += 1
+        # Check if loop is stuck in local optimum by checking if error and
+        # weights are the same as previous iteration.
+        elif (
+            i > 0 and abs(t[i] - t[i-1]) < 1e-3
+            and np.allclose(weights[i], weights[i-1], atol=1e-3)
+        ):
+            logging.info("\t\tStuck in loop")
+            break
+        else:
+            i += 1
 
         # End IRL Loop
 
@@ -1066,8 +1075,8 @@ def run_trial_target_domain(
     # giving weights [0, 1, 0] into the run_trial_source_domain and
     # noticing that the ouptput had poor demographic parity.
     #
-    # test_df['y'] = y_test
-    test_df['y'] = clf.predict(X_test)
+    test_df['y'] = y_test
+    # test_df['y'] = clf.predict(X_test)
     clf_pol = compute_optimal_policy(
         clf_df=test_df,  # NOT the dataset used to train the C_{Y_Z,X} clf
         clf=clf,

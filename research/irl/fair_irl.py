@@ -209,7 +209,10 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
     return mu, demos
 
 
-def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weights=False):
+def irl_error(
+        w, muE, muL, dot_weights_feat_exp=True, encourage_even_weights=False,
+        encourage_uneven_weights=False,
+):
     """
     Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
 
@@ -221,9 +224,15 @@ def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weight
         Array of all expert feature expectations.
     muL : array-like<array-like<float>>
         List of all learned feature expectations.
-    encourage_small_weights : bool, default False
+    dot_weights_feat_exp : bool, default True
+        If True, error = l2_norm( (muE - muL).dot(w) )
+        If False, error = l2_norm(muE - muL) * l2_norm(w)
+        The default value is the typical IRL one. Use the other if all feat
+        exp should be non-zero weights. Helps avoid issue of IRL nulling out
+        feat exp componets that it has trouble matching.
+    encourage_even_weights : bool, default False
         If true, multiplies the error by the l2 norm of the weights.
-    encourage_large_weights : bool, default False
+    encourage_uneven_weights : bool, default False
         If true, divides the error by the l2 norm of the weights.
 
     Returns
@@ -242,34 +251,6 @@ def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weight
     best_err = None
     best_j = None
 
-    # New as of 10/07/2023.
-    # Helps when there's variance in expert behavior.
-    # Compute the error w.r.t. each expert demo, and return the largest error.
-    # worst_exp_err = 0
-    # for _muE in muE:
-    #     mu_deltas = np.zeros((len(muL), muE.shape[1]))
-    #     l2_mu_deltas = np.zeros(len(muL))
-    #     best_err = np.inf
-    #     best_j = None
-    #     # Find best muj
-    #     for j, muj in enumerate(muL):
-    #         mu_deltas[j] = _muE - muj
-    #         err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=4)
-    #         if encourage_small_weights:
-    #             smallest_w = min(np.abs(w))
-    #             err = err / (1-smallest_w)
-    #         elif encourage_large_weights:
-    #             l2_w = np.linalg.norm(w)
-    #             err = err / l2_w
-    #         if err < best_err:
-    #             best_err = err
-    #             best_j = j
-
-    #     if best_err > worst_exp_err:
-    #         worst_exp_err = best_err
-
-    # return worst_exp_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]
-
     mu_deltas = np.zeros((len(muL), muE.shape[1]))
     l2_mu_deltas = np.zeros(len(muL))
     best_err = np.inf
@@ -277,11 +258,16 @@ def irl_error(w, muE, muL, encourage_small_weights=False, encourage_large_weight
     # Find best muj
     for j, muj in enumerate(muL):
         mu_deltas[j] = muE.mean(axis=0) - muj
-        err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=8)
-        if encourage_small_weights:
+
+        if dot_weights_feat_exp:
+            err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=8)
+        else:
+            err = np.linalg.norm(np.abs(mu_deltas[j])) * np.linalg.norm(w, ord=8)
+
+        if encourage_even_weights:
             smallest_w = min(np.abs(w))
             err = err / (1-smallest_w)
-        elif encourage_large_weights:
+        elif encourage_uneven_weights:
             l2_w = np.linalg.norm(w)
             err = err / l2_w
         if err < best_err:

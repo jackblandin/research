@@ -323,7 +323,7 @@ class ClassificationMDP:
                 if len(group) == 1:
                     continue
 
-                constr = np.zeros_like(ldf.index)
+                constr = np.zeros_like(ldf.index, dtype=float)
                 locy0 = group.index[0]
                 locy1 = group.index[1]
                 _group = group[x_cols+['z']]
@@ -466,6 +466,8 @@ def _find_all_solutions_lp(
             res = linprog(c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
 
         best_reward = -1*res.fun
+        logging.debug(f"\nBest Reward:\t {best_reward}")
+        logging.debug(f"Lambdas:\t {np.round(res.x, 2)}")
         pi_opt = np.zeros(n_states, dtype=int)
         for s in range(n_states):
             start_idx = s*n_actions
@@ -475,12 +477,18 @@ def _find_all_solutions_lp(
         best_policies = [pi_opt]
 
     else:
-        for i in range(len(A_eq)):
+        for i in range(len(c)-1):
 
             # Positive error
             cpos = np.array(c)
             cpos[i] += error_term
-            res = linprog(cpos, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+
+            if A_ub is None or len(A_ub) == 0:
+                assert(b_ub is None or len(b_ub) == 0)
+                res = linprog(cpos, A_eq=A_eq, b_eq=b_eq)
+            else:
+                res = linprog(cpos, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+
             if ((-1*res.fun > best_reward)
                 and (not np.isclose(-1*res.fun, best_reward, atol=.001))):
                 best_reward = -1*res.fun
@@ -498,7 +506,13 @@ def _find_all_solutions_lp(
             # Negative error
             cneg = np.array(c)
             cneg[i] -= error_term
-            res = linprog(cneg, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+
+            if A_ub is None or len(A_ub) == 0:
+                assert(b_ub is None or len(b_ub) == 0)
+                res = linprog(cneg, A_eq=A_eq, b_eq=b_eq)
+            else:
+                res = linprog(cneg, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub)
+
             if ((-1*res.fun > best_reward)
                 and (not np.isclose(-1*res.fun, best_reward, atol=.001))):
                 best_reward = -1*res.fun
