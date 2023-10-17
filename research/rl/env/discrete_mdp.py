@@ -798,6 +798,7 @@ def compute_optimal_policy(env, gamma):
     # Below works, leaving here in case I mess it up with multiple optimal
     # policy computations.
     pi_opt = np.zeros(env.n_states, dtype=int)
+    print(f"res.fun: {res.fun:.3f}")
     for s in range(env.n_states):
         start_idx = s*env.n_actions
         end_idx = s*env.n_actions+env.n_actions
