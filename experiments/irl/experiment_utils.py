@@ -308,11 +308,17 @@ def generate_single_exp_results_df(feat_obj_set, perf_obj_set, results):
 
     for obj in feat_obj_set.objectives:
         exp_df_cols.append(f"muE_target_{obj.name}")
+
+    for obj in perf_obj_set.objectives:
+        exp_df_cols.append(f"muE_perf_target_{obj.name}")
+
+    for obj in feat_obj_set.objectives:
         exp_df_cols.append(f"muL_target_hold_{obj.name}")
 
     for obj in perf_obj_set.objectives:
         exp_df_cols.append(f"muE_perf_hold_{obj.name}")
         exp_df_cols.append(f"muL_perf_best_hold_{obj.name}")
+        exp_df_cols.append(f"muL_perf_target_best_hold_{obj.name}")
 
     exp_df = pd.DataFrame(results, columns=exp_df_cols)
 
@@ -321,7 +327,8 @@ def generate_single_exp_results_df(feat_obj_set, perf_obj_set, results):
 
 def new_trial_result(
     feat_obj_set, perf_obj_set, muE, muE_hold, muE_perf_hold, df_irl,
-    muE_target=None, muL_target_hold=None,
+    muE_target=None, muE_perf_target=None, muL_target_hold=None,
+    muL_perf_target_hold=None,
 ):
     """
     Generates a row of "results", which are collected and persisted for each
@@ -349,8 +356,14 @@ def new_trial_result(
     muE_target : array-like<float>. Shape(n_expert_demos, n_objectives).
         The feature expectations of running the expert algo on the target
         domain demo set.
+    muE_perf_target : array-like<float>. Shape(n_expert_demos, n_objectives).
+        The performance measures of running the expert algo on the target
+        domain demo set.
     muL_target_hold
-        The feature expectations of running the expert algo on the target
+        The feature expectations of running the learned algo on the target
+        domain holdout set.
+    muL_perf_target_hold
+        The performance measures of running the expert algo on the target
         domain holdout set.
 
     Returns
@@ -413,13 +426,24 @@ def new_trial_result(
     result.append(best_row['mu_delta_l2norm'])
     result.append(best_row['mu_delta_l2norm_hold'])
 
-    # Adds n_feat_exp * 2 values
+    # Adds n_feat_exp * 1 values
     for i, obj in enumerate(feat_obj_set.objectives):
 
         if muE_target is not None:
             result.append(muE_target[i])
         else:
             result.append(np.nan)
+
+    # Adds n_perf_meas * 1 values
+    for i, obj in enumerate(perf_obj_set.objectives):
+
+        if muE_perf_target is not None:
+            result.append(muE_perf_target[i])
+        else:
+            result.append(np.nan)
+
+    # Adds n_feat_exp * 1 values
+    for i, obj in enumerate(feat_obj_set.objectives):
 
         if muL_target_hold is not None:
             result.append(muL_target_hold[i])
@@ -432,6 +456,10 @@ def new_trial_result(
         perf_hold_mean = np.mean(muE_perf_hold[:, i])
         result.append(perf_hold_mean)
         result.append(best_row[f"muL_perf_best_hold_{obj.name}"])
+        if muL_perf_target_hold is not None:
+            result.append(muL_perf_target_hold[i])
+        else:
+            result.append(np.nan)
 
     return result
 
@@ -979,6 +1007,12 @@ def run_trial_target_domain(
     muE_target : array-like<float>. Shape(n_expert_demos, n_objectives).
         The feature expectations of running the expert algo on the target
         domain demo set.
+    muE_perf_target : array-like<float>. Shape(n_expert_demos, n_objectives).
+        The performance measures of running the expert algo on the target
+        domain demo set.
+    muL_perf_target_hold
+        The performance measures of running the expert algo on the target
+        domain holdout set.
     muL_target_hold
         The feature expectations of running the expert algo on the target
         domain holdout set.
@@ -994,6 +1028,13 @@ def run_trial_target_domain(
     feat_obj_set = ObjectiveSet(objectives)
     del objectives
     feat_obj_set_cols = [obj.name for obj in feat_obj_set.objectives]
+
+    objectives = []
+    for obj_name in exp_info['PERF_MEAS_OBJECTIVE_NAMES']:
+        objectives.append(OBJ_LOOKUP_BY_NAME[obj_name]())
+    perf_obj_set = ObjectiveSet(objectives)
+    del objectives
+    perf_obj_set_cols = [obj.name for obj in perf_obj_set.objectives]
 
     # Get the best weights from the source domain
     source_best_w = np.zeros(len(feat_obj_set_cols))
@@ -1052,6 +1093,16 @@ def run_trial_target_domain(
     )
     logging.info(f"muE_target:\n{muE_target}")
 
+    # Generate expert demonstrations for performance measures.
+    muE_perf_target, _ = generate_demos_k_folds(
+        X=X_test,
+        y=y_test,
+        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
+        obj_set=perf_obj_set,
+        n_demos=exp_info['N_EXPERT_DEMOS'],
+    )
+    logging.info(f"muE_perf_target:\n{muE_perf_target}")
+
     ##
     # Learn a policy (clf_pol) from the reward (SVM) weights.
     ##
@@ -1094,11 +1145,13 @@ def run_trial_target_domain(
     demo_hold = generate_demo(clf_pol, X_hold, y_hold, can_observe_y=False)
     muL_target = feat_obj_set.compute_demo_feature_exp(demo)
     muL_target_hold = feat_obj_set.compute_demo_feature_exp(demo_hold)
+    muL_perf_target_hold = perf_obj_set.compute_demo_feature_exp(demo_hold)
     logging.info(f"target domain muL = {np.round(muL_target, 3)}")
     logging.info(f"target domain muE = {np.round(muE_target.mean(axis=0), 3)}")
     logging.info(f"target domain muL_hold = {np.round(muL_target_hold, 3)}")
+    logging.info(f"target domain muL_perf_hold = {np.round(muL_perf_target_hold, 3)}")
 
-    return muE_target, muL_target_hold, clf_pol
+    return muE_target, muE_perf_target, muL_target_hold, muL_perf_target_hold, clf_pol
 
 
 def run_experiment(
@@ -1180,7 +1233,7 @@ def run_experiment(
         muL_target_hold = None
 
         if exp_info['TARGET_DATASET'] is not None:
-            muE_target, muL_target_hold, clf_pol = run_trial_target_domain(
+            muE_target, muE_perf_target, muL_target_hold, muL_perf_target_hold, clf_pol = run_trial_target_domain(
                 exp_info,
                 weights,
                 t_hold,
@@ -1189,6 +1242,7 @@ def run_experiment(
                 feature_types=target_feature_types,
             )
             muE_target_mean = muE_target.mean(axis=0)
+            muE_perf_target_mean = muE_perf_target.mean(axis=0)
 
         # Aggregate trial results
         _result = new_trial_result(
@@ -1199,7 +1253,9 @@ def run_experiment(
             muE_perf_hold,
             df_irl,
             muE_target_mean,
+            muE_perf_target_mean,
             muL_target_hold,
+            muL_perf_target_hold,
         )
         results.append(_result)
 
@@ -1376,25 +1432,25 @@ def plot_results_source_domain_only(
 
 
         mu_df['Demo Producer'] = (
-            mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E$')
+            mu_df['Demo Producer'].str.replace('muE', r'$\mu^E$')
         )
         mu_df['Demo Producer'] = (
-            mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+            mu_df['Demo Producer'].str.replace('muL', r'$\mu^L$')
         )
         perf_df['Demo Producer'] = (
-            perf_df['Demo Producer'].str.replace('muE', r'$\\mu^E$')
+            perf_df['Demo Producer'].str.replace('muE', r'$\mu^E$')
         )
         perf_df['Demo Producer'] = (
-            perf_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+            perf_df['Demo Producer'].str.replace('muL', r'$\mu^L$')
         )
         w_df['IRL Method'] = (
             w_df['IRL Method'].str.replace('wL', r'$w^L$')
         )
 
-        mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E$')
-        mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
-        perf_hue_order = pd.Series(perf_hue_order).str.replace('muE', r'$\\mu^E$')
-        perf_hue_order = pd.Series(perf_hue_order).str.replace('muL', r'$\\mu^L$')
+        mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\mu^E$')
+        mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\mu^L$')
+        perf_hue_order = pd.Series(perf_hue_order).str.replace('muE', r'$\mu^E$')
+        perf_hue_order = pd.Series(perf_hue_order).str.replace('muL', r'$\mu^L$')
         w_hue_order = pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
 
         if min_mu_value is not None:
@@ -1536,7 +1592,11 @@ def plot_results_source_domain_only(
 
 
 def plot_results_target_domain(
-    objective_set_names, expert_algos, source_dataset, target_dataset,
+    feat_objective_set_names,
+    perf_objective_set_names,
+    expert_algos,
+    source_dataset,
+    target_dataset,
     mu_noise_factor=0,
     perf_noise_factor=0,
     w_noise_factor=0,
@@ -1554,6 +1614,7 @@ def plot_results_target_domain(
         # 'wL (FairIRLNorm)',
         # 'wL (FairIRLNorm2)'
     ],
+    perf_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
     irl_methods_to_exclude=[
         'FairIRLDeNormed',
         'FairIRLFODeNormed',
@@ -1564,8 +1625,11 @@ def plot_results_target_domain(
     max_exp_timestamp=None,
     min_mu_value=None,
     mu_yticks=[.4, .5, .6, .7, .8, .9, 1],
+    perf_yticks=[.4, .5, .6, .7, .8, .9, 1],
     mu_ylim=(0, 1.05),
     mu_whis=[5, 95],
+    perf_ylim=(0, 1.05),
+    perf_whis=[5, 95],
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -1573,22 +1637,28 @@ def plot_results_target_domain(
 
     # Plot boxplot for feature expectations
     n_exp = len(expert_algos)
+    n_feat_exp = len(feat_objective_set_names)
     fig, axes = plt.subplots(
-        1,
+        2,
         n_exp,
-        figsize=(2.4*n_exp, 2.2),
+        figsize=(1.2*n_exp*n_feat_exp, 5),
+        height_ratios=[1, 1],
     )
 
     for exp_i, expert_algo in enumerate(expert_algos):
 
         if n_exp == 1:
-            ax1 = axes
+            ax1 = axes[0]
+            ax2 = axes[1]
         else:
-            ax1 = axes[exp_i]
+            ax1 = axes[0][exp_i]
+            ax2 = axes[1][exp_i]
 
         # Construct a pivot table so we can do a seaborn boxplot
         mu_cols = ['Value', 'Demo Producer', 'Feature Expectation']
         mu_rows = []
+        perf_cols = ['Value', 'Demo Producer', 'Performance Measures']
+        perf_rows = []
         w_cols = ['Value', 'IRL Method', 'Weight']
         w_rows = []
 
@@ -1617,7 +1687,8 @@ def plot_results_target_domain(
                 info['EXPERT_ALGO'] != expert_algo
                 or info['DATASET'] != source_dataset
                 or info['TARGET_DATASET'] != target_dataset
-                or set(info['OBJECTIVE_NAMES']) != set(objective_set_names)
+                or set(info['FEAT_EXP_OBJECTIVE_NAMES']) != set(feat_objective_set_names)
+                or set(info['PERF_MEAS_OBJECTIVE_NAMES']) != set(perf_objective_set_names)
                 or info['IRL_METHOD'] in irl_methods_to_exclude
                 or extra_skip_conditions(info)
             ):
@@ -1625,7 +1696,7 @@ def plot_results_target_domain(
 
             for idx, row in result.iterrows():
                 # Append muE and muL results
-                for obj_name in info['OBJECTIVE_NAMES']:
+                for obj_name in info['FEAT_EXP_OBJECTIVE_NAMES']:
                     mu_rows.append([
                         row[f"muE_hold_{obj_name}_mean"],
                         'muE',
@@ -1642,7 +1713,7 @@ def plot_results_target_domain(
                             'muL_target' + ' ' + info['IRL_METHOD'],
                             obj_name,
                         ])
-                for obj_name in info['OBJECTIVE_NAMES']:
+                for obj_name in info['FEAT_EXP_OBJECTIVE_NAMES']:
                     mu_rows.append([
                         row[f"muL_best_hold_{obj_name}"],
                         f"muL ({info['IRL_METHOD']})",
@@ -1651,6 +1722,25 @@ def plot_results_target_domain(
                     w_rows.append([
                         row[f"wL_{obj_name}"],
                         f"wL ({info['IRL_METHOD']})",
+                        obj_name,
+                    ])
+
+                for obj_name in info['PERF_MEAS_OBJECTIVE_NAMES']:
+                    perf_rows.append([
+                        row[f"muE_perf_hold_{obj_name}"],
+                        f"muE_source",
+                        obj_name,
+                    ])
+                for obj_name in info['PERF_MEAS_OBJECTIVE_NAMES']:
+                    perf_rows.append([
+                        row[f"muE_perf_target_{obj_name}"],
+                        f"muE_target",
+                        obj_name,
+                    ])
+                for obj_name in info['PERF_MEAS_OBJECTIVE_NAMES']:
+                    perf_rows.append([
+                        row[f"muL_perf_target_best_hold_{obj_name}"],
+                        f"muL_target ({info['IRL_METHOD']})",
                         obj_name,
                     ])
 
@@ -1665,33 +1755,64 @@ def plot_results_target_domain(
             | mu_df['Demo Producer'].str.contains('muL_target')
         ]
 
+        perf_df = pd.DataFrame(perf_rows, columns=perf_cols)
+        perf_df['Value'] += perf_noise_factor*(np.random.rand(len(perf_df)) - .5)
+        perf_df['Value'] = perf_df['Value'].clip(0, 1)
+
 
         w_df = pd.DataFrame(w_rows, columns=w_cols)
         w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
         mu_df['Demo Producer'] = (
-            mu_df['Demo Producer'].str.replace('muE_target', r'$\\mu^E_{TARGET}$')
+            mu_df['Demo Producer'].str.replace('muE_target', r'$\mu^E_{TARGET}$')
         )
         mu_df['Demo Producer'] = (
-            mu_df['Demo Producer'].str.replace('muE', r'$\\mu^E_{SOURCE}$')
+            mu_df['Demo Producer'].str.replace('muE', r'$\mu^E_{SOURCE}$')
         )
         mu_df['Demo Producer'] = (
-            mu_df['Demo Producer'].str.replace('muL_target', r'$\\mu^L_{TARGET}$')
+            mu_df['Demo Producer'].str.replace('muL_target', r'$\mu^L_{TARGET}$')
         )
         mu_df['Demo Producer'] = (
-            mu_df['Demo Producer'].str.replace('muL', r'$\\mu^L$')
+            mu_df['Demo Producer'].str.replace('muL', r'$\mu^L$')
         )
         mu_hue_order = (
-            pd.Series(mu_hue_order).str.replace('muE_target', r'$\\mu^E_{TARGET}$')
+            pd.Series(mu_hue_order).str.replace('muE_target', r'$\mu^E_{TARGET}$')
         )
         mu_hue_order = (
-            pd.Series(mu_hue_order).str.replace('muE', r'$\\mu^E_{SOURCE}$')
+            pd.Series(mu_hue_order).str.replace('muE', r'$\mu^E_{SOURCE}$')
         )
         mu_hue_order = (
-            pd.Series(mu_hue_order).str.replace('muL_target', r'$\\mu^L_{TARGET}$')
+            pd.Series(mu_hue_order).str.replace('muL_target', r'$\mu^L_{TARGET}$')
         )
         mu_hue_order = (
-            pd.Series(mu_hue_order).str.replace('muL', r'$\\mu^L$')
+            pd.Series(mu_hue_order).str.replace('muL', r'$\mu^L$')
         )
+
+
+        # perf_df['Demo Producer'] = (
+        #     perf_df['Demo Producer'].str.replace('muE_target', r'$\mu^E_{TARGET}$')
+        # )
+        # perf_df['Demo Producer'] = (
+        #     perf_df['Demo Producer'].str.replace('muE', r'$\mu^E_{SOURCE}$')
+        # )
+        # perf_df['Demo Producer'] = (
+        #     perf_df['Demo Producer'].str.replace('muL_target', r'$\mu^L_{TARGET}$')
+        # )
+        # perf_df['Demo Producer'] = (
+        #     perf_df['Demo Producer'].str.replace('muL', r'$\mu^L$')
+        # )
+        # perf_hue_order = (
+        #     pd.Series(perf_hue_order).str.replace('muE_target', r'$\mu^E_{TARGET}$')
+        # )
+        # perf_hue_order = (
+        #     pd.Series(perf_hue_order).str.replace('muE', r'$\mu^E_{SOURCE}$')
+        # )
+        # perf_hue_order = (
+        #     pd.Series(perf_hue_order).str.replace('muL_target', r'$\mu^L_{TARGET}$')
+        # )
+        # perf_hue_order = (
+        #     pd.Series(perf_hue_order).str.replace('muL', r'$\mu^L$')
+        # )
+
         w_df['IRL Method'] = (
             w_df['IRL Method'].str.replace('wL', r'$w^L$')
         )
@@ -1703,8 +1824,10 @@ def plot_results_target_domain(
             mu_df = mu_df.query('Value >= @min_mu_value')
 
         mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
+        perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
         w_df = w_df.sort_values(['Weight', 'IRL Method'])
 
+        # Feature Expecations
         sns.boxplot(
             x=mu_df['Feature Expectation'],
             y=mu_df['Value'],
@@ -1727,7 +1850,7 @@ def plot_results_target_domain(
                 loc='lower left',
                 labelspacing=0,
                 columnspacing=1.5,
-                bbox_to_anchor=(-2.2, -.55),
+                bbox_to_anchor=(-2.2, -.75),
             )
 
         ax1.set_ylabel(None)
@@ -1742,10 +1865,48 @@ def plot_results_target_domain(
 
         ax1.set_title(f"Expert: {expert_algo}")
 
+        # Performance measures
+        sns.boxplot(
+            x=perf_df['Performance Measures'],
+            y=perf_df['Value'],
+            hue=perf_df['Demo Producer'],
+            # hue_order=mu_hue_order,
+            ax=ax2,
+            fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list([(.6,.6,.6)]) + list(cp[0:3]),
+            boxprops=dict(alpha=1),
+            linewidth=.7,
+            whis=mu_whis,
+        )
+        ax2.set_xlabel('Performance Measure')
+        ax2.get_legend().remove()
+        if exp_i == len(expert_algos)-1:
+            ax2.legend(
+                title=None,
+                ncol=4,
+                loc='lower left',
+                labelspacing=0,
+                columnspacing=1.5,
+                bbox_to_anchor=(-2.2, -.75),
+            )
+
+        ax2.set_ylabel(None)
+        ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax2.set_yticks(mu_yticks)
+        ax2.set_ylim(mu_ylim)
+
+        if exp_i == 0:
+            ax2.set_yticklabels(mu_yticks)
+        else:
+            ax2.set_yticklabels([])
+
+        ax2.set_title(f"Expert: {expert_algo}")
+
     plt.tight_layout()
-    plt.subplots_adjust(wspace=.03, hspace=.5)
+    plt.subplots_adjust(wspace=.03, hspace=1.1)
 
     print(f"SOURCE DATASET: {source_dataset}")
     print(f"TARGET DATASET: {target_dataset}")
 
-    return mu_df, w_df
+    return result, mu_df, w_df, perf_df
