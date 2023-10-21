@@ -30,7 +30,9 @@ OBJ_LOOKUP_BY_NAME = {
     'Acc': AccuracyObjective,
     'DemPar': DemographicParityObjective,
     'EqOpp': EqualOpportunityObjective,
-    'PredPar': PredictiveEqualityObjective,
+    'FPRPar': FalsePositiveRateParityObjective,
+    'TNRPar': TrueNegativeRateParityObjective,
+    'FNRPar': FalseNegativeRateParityObjective,
     'TPR_Z0': GroupTruePositiveRateZ0Objective,
     'TPR_Z1': GroupTruePositiveRateZ1Objective,
     'TNR_Z0': GroupTrueNegativeRateZ0Objective,
@@ -160,20 +162,6 @@ def generate_expert_algo_lookup(feature_types):
         sensitive_features='z',
     )
 
-    # PredEq
-    pred_eq_thresh_opt = ThresholdOptimizer(
-        constraints='false_negative_rate_parity',
-        predict_method="predict",
-        prefit=False,
-        estimator=sklearn_clf_pipeline(
-            feature_types=feature_types,
-            clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-        )
-    )
-    pred_eq_wrapper = FairLearnSkLearnWrapper(
-        clf=pred_eq_thresh_opt,
-        sensitive_features='z',
-    )
 
     dummy_pipe = DummyClassifier(strategy='uniform')
 
@@ -181,13 +169,11 @@ def generate_expert_algo_lookup(feature_types):
         'OptAcc': opt_acc_pipe,
         'HardtDemPar': dem_par_wrapper,
         'HardtEqOpp': eq_opp_wrapper,
-        'PredEq': pred_eq_wrapper,
         'Dummy': dummy_pipe,
         # Noisy
         'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.01, .01]),
         'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=[.1, .1]),
         'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=[.1, .1]),
-        'PredEqNoisy': UnfairNoisyClassifier(clf=pred_eq_wrapper, prob=[.1, .1]),
         'DummyNoisy': UnfairNoisyClassifier(clf=dummy_pipe, prob=[.1, .1]),
     }
 
