@@ -6,7 +6,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import sklearn.base
 from fairlearn.postprocessing import ThresholdOptimizer
+from fairlearn.reductions import ExponentiatedGradient, EqualizedOdds, ErrorRateParity
 from matplotlib.ticker import FormatStrFormatter
 from research.rl.env.clf_mdp import *
 from research.rl.env.clf_mdp_policy import *
@@ -49,12 +51,33 @@ class FairLearnSkLearnWrapper():
     Wrapper around scikit-learn classifiers to make them compatible with
     fairlearn classifiers, which require an additional `sensitive_features`
     attribute to be passed in when calling `fit` and `predict`.
+
+    Attributes
+    ----------
+    initial_clf : sklearn base estimator
+        A clone of the initial `clf`. Used to create new clones later on
+        without any of the attributes updated.
+    has_access_to_sensitive_features : bool, default True
+        If False, sensitive features are not available at prediction time. E.g.
+        for fairlearn reductions (as opposed to threshold optimizers).
+    clone_on_fit : bool, default False
+        If True, resets the base classifier.
     """
-    def __init__(self, clf, sensitive_features):
+    def __init__(
+        self, clf, sensitive_features,
+        has_access_to_sensitive_features=True,
+        clone_on_fit=False,
+    ):
         self.clf = clf
+        self.initial_clf = sklearn.base.clone(self.clf)
         self.sensitive_features = sensitive_features
+        self.has_access_to_sensitive_features = has_access_to_sensitive_features
+        self.clone_on_fit = clone_on_fit
 
     def fit(self, X, y, sample_weight=None, **kwargs):
+        if self.clone_on_fit:
+            self.clf = sklearn.base.clone(self.initial_clf)
+
         self.clf.fit(
             X,
             y,
@@ -64,11 +87,19 @@ class FairLearnSkLearnWrapper():
         return self
 
     def predict(self, X, sample_weight=None, **kwargs):
-        return self.clf.predict(
-            X,
-            sensitive_features=X[self.sensitive_features],
-            **kwargs,
-        )
+        if self.has_access_to_sensitive_features:
+            preds = self.clf.predict(
+                X,
+                sensitive_features=X[self.sensitive_features],
+                **kwargs,
+            )
+        else:
+            preds = self.clf.predict(
+                X,
+                **kwargs,
+            )
+
+        return preds
 
 
 class UnfairNoisyClassifier():
@@ -162,15 +193,50 @@ def generate_expert_algo_lookup(feature_types):
         sensitive_features='z',
     )
 
+    # HardtEqOdds
+    eq_odds_thresh_opt = ThresholdOptimizer(
+        constraints='equalized_odds',
+        predict_method="predict",
+        prefit=False,
+        estimator=sklearn_clf_pipeline(
+            feature_types=feature_types,
+            clf_inst=RandomForestClassifier(),
+        )
+    )
+    eq_odds_thresh_wrapper = FairLearnSkLearnWrapper(
+        clf=eq_opp_thresh_opt,
+        sensitive_features='z',
+    )
+
+    # Equal Odds Reduction
+    eq_odds = EqualizedOdds(difference_bound=.01)
+    eq_odds_exp_grad = ExponentiatedGradient(
+        sample_weight_name='classifier__sample_weight',
+        constraints=eq_odds,
+        estimator=sklearn_clf_pipeline(
+            feature_types=feature_types,
+            # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
+            clf_inst=RandomForestClassifier(),
+        )
+    )
+    eq_odds_red_wrapper = FairLearnSkLearnWrapper(
+        clf=eq_odds_exp_grad,
+        sensitive_features='z',
+        has_access_to_sensitive_features=False,
+        clone_on_fit=True,
+    )
 
     dummy_pipe = DummyClassifier(strategy='uniform')
 
     expert_algo_lookup = {
+        # Experts
         'OptAcc': opt_acc_pipe,
         'HardtDemPar': dem_par_wrapper,
         'HardtEqOpp': eq_opp_wrapper,
+        'HardtEqOdds': eq_odds_thresh_wrapper,
         'Dummy': dummy_pipe,
-        # Noisy
+        'RedEqOdds': eq_odds_red_wrapper,
+        # Initial policies
         'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.01, .01]),
         'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=[.1, .1]),
         'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=[.1, .1]),
@@ -644,6 +710,7 @@ def run_trial_source_domain(
     logging.debug('Starting IRL Loop ...')
 
     done = False  # When true, breaks IRL loop
+    is_stuck_in_loop = False
     while not done:
         logging.info(f"\tIRL Loop iteration {i+1}/{exp_info['MAX_ITER']} ...")
 
@@ -660,16 +727,18 @@ def run_trial_source_domain(
         )
         try:
             allow_pos_weights = not exp_info['ALLOW_NEG_WEIGHTS']
-            alpha = np.random.rand()
-            if alpha < 1:
+            if is_stuck_in_loop:
+                is_stuck_in_loop = False
                 pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].index
-                neg_idx = X_irl[-5:].index
+                neg_idx = X_irl[exp_info['N_EXPERT_DEMOS']:].sample(2).index
                 _X_irl = pd.concat([X_irl.loc[pos_idx], X_irl.loc[neg_idx]])
                 _y_irl = pd.concat([y_irl.loc[pos_idx], y_irl.loc[neg_idx]])
+                logging.info('\t\tStuck in loop: sampling 1 random negative demo')
+                display(_X_irl)
             else:
                 _X_irl = X_irl
                 _y_irl = y_irl
-            svm = SVM(positive_weights_only=allow_pos_weights).fit(X_irl, y_irl)
+            svm = SVM(positive_weights_only=allow_pos_weights).fit(_X_irl, _y_irl)
         except ValueError as e:
             logging.info('\t\tAllowing negative weights.')
             svm = SVM(positive_weights_only=False).fit(X_irl, y_irl)
@@ -791,7 +860,8 @@ def run_trial_source_domain(
             and np.allclose(weights[i], weights[i-1], atol=1e-3)
         ):
             logging.info("\t\tStuck in loop")
-            break
+            is_stuck_in_loop = True
+            i += 1
         else:
             i += 1
 
@@ -1276,7 +1346,7 @@ def plot_results_source_domain_only(
     perf_noise_factor=0,
     w_noise_factor=0,
     mu_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
-    perf_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
+    perf_hue_order=['Expert', 'Learned (FairIRL)'],
     w_hue_order=[None, 'wL (FairIRL)', 'wL (FairIRLFO)'],
     irl_methods_to_exclude=[
         'FairIRLDeNormed',
@@ -1299,6 +1369,7 @@ def plot_results_source_domain_only(
     mu_whis=[5, 95],
     perf_whis=[5, 95],
     w_whis=[5, 95],
+    size_mult=1,
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -1309,7 +1380,7 @@ def plot_results_source_domain_only(
     fig, axes = plt.subplots(
         3,
         n_exp,
-        figsize=(0.6*n_exp*n_feat_exp, 9),
+        figsize=(0.6*size_mult*n_exp*n_feat_exp, 7*size_mult),
         height_ratios=[1,1,1],
     )
 
@@ -1424,10 +1495,10 @@ def plot_results_source_domain_only(
             mu_df['Demo Producer'].str.replace('muL', r'$\mu^L$')
         )
         perf_df['Demo Producer'] = (
-            perf_df['Demo Producer'].str.replace('muE', r'$\mu^E$')
+            perf_df['Demo Producer'].str.replace('muE', 'Expert')
         )
         perf_df['Demo Producer'] = (
-            perf_df['Demo Producer'].str.replace('muL', r'$\mu^L$')
+            perf_df['Demo Producer'].str.replace('muL', 'Learned')
         )
         w_df['IRL Method'] = (
             w_df['IRL Method'].str.replace('wL', r'$w^L$')
@@ -1435,8 +1506,6 @@ def plot_results_source_domain_only(
 
         mu_hue_order = pd.Series(mu_hue_order).str.replace('muE', r'$\mu^E$')
         mu_hue_order = pd.Series(mu_hue_order).str.replace('muL', r'$\mu^L$')
-        perf_hue_order = pd.Series(perf_hue_order).str.replace('muE', r'$\mu^E$')
-        perf_hue_order = pd.Series(perf_hue_order).str.replace('muL', r'$\mu^L$')
         w_hue_order = pd.Series(w_hue_order).str.replace('wL', r'$w^L$')
 
         if min_mu_value is not None:
@@ -1484,6 +1553,11 @@ def plot_results_source_domain_only(
         else:
             ax1.set_yticklabels([])
 
+
+        mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
+        perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
+        w_df = w_df.sort_values(['Weight', 'IRL Method'])
+
         # Plot boxplot for weights
         sns.boxplot(
             x=w_df['Weight'],
@@ -1526,7 +1600,7 @@ def plot_results_source_domain_only(
             x=perf_df['Performance Measures'],
             y=perf_df['Value'],
             hue=perf_df['Demo Producer'],
-            hue_order=perf_hue_order,
+            # hue_order=perf_hue_order,
             ax=ax3,
             fliersize=0,  # Remove outliers
             saturation=1,
@@ -1616,6 +1690,7 @@ def plot_results_target_domain(
     mu_whis=[5, 95],
     perf_ylim=(0, 1.05),
     perf_whis=[5, 95],
+    size_mult=1,
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -1627,7 +1702,7 @@ def plot_results_target_domain(
     fig, axes = plt.subplots(
         2,
         n_exp,
-        figsize=(1.2*n_exp*n_feat_exp, 5),
+        figsize=(.7*size_mult*n_exp*n_feat_exp, 5*size_mult),
         height_ratios=[1, 1],
     )
 
@@ -1714,19 +1789,19 @@ def plot_results_target_domain(
                 for obj_name in info['PERF_MEAS_OBJECTIVE_NAMES']:
                     perf_rows.append([
                         row[f"muE_perf_hold_{obj_name}"],
-                        f"muE_source",
+                        f"Expert (source)",
                         obj_name,
                     ])
                 for obj_name in info['PERF_MEAS_OBJECTIVE_NAMES']:
                     perf_rows.append([
                         row[f"muE_perf_target_{obj_name}"],
-                        f"muE_target",
+                        f"Expert (target)",
                         obj_name,
                     ])
                 for obj_name in info['PERF_MEAS_OBJECTIVE_NAMES']:
                     perf_rows.append([
                         row[f"muL_perf_target_best_hold_{obj_name}"],
-                        f"muL_target ({info['IRL_METHOD']})",
+                        f"{info['IRL_METHOD']} Learned (target)",
                         obj_name,
                     ])
 
@@ -1879,11 +1954,11 @@ def plot_results_target_domain(
 
         ax2.set_ylabel(None)
         ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
-        ax2.set_yticks(mu_yticks)
-        ax2.set_ylim(mu_ylim)
+        ax2.set_yticks(perf_yticks)
+        ax2.set_ylim(perf_ylim)
 
         if exp_i == 0:
-            ax2.set_yticklabels(mu_yticks)
+            ax2.set_yticklabels(perf_yticks)
         else:
             ax2.set_yticklabels([])
 

@@ -260,9 +260,9 @@ def irl_error(
         mu_deltas[j] = muE.mean(axis=0) - muj
 
         if dot_weights_feat_exp:
-            err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=8)
+            err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=2)
         else:
-            err = np.linalg.norm(np.abs(mu_deltas[j])) * np.linalg.norm(w, ord=8)
+            err = np.linalg.norm(np.abs(mu_deltas[j])) * np.linalg.norm(w, ord=2)
 
         if encourage_even_weights:
             smallest_w = min(np.abs(w))
