@@ -122,6 +122,20 @@ class SVM(BaseEstimator, ClassifierMixin):
             else:
                 vectorized = False
 
+        # 01/09/2024
+        # Trying this out. If any xi of expert (y=1) is less than the max of
+        # any corresponding xi of the learner (y=0), then change the expert's
+        # xi to the learner's max xi. This is is testing a hack which is meant
+        # to solve why this SVM can only learn positive weights when ALL of
+        # the expert's xi values are greater than all of every single learner.
+        # y1_idx = np.where(np.array(y) == 1)[0][-1]
+        # display(y1_idx)
+        # y1_xi_max = X[:y1_idx+1].max(axis=0)
+        # for x_i in range(len(X)):
+        #     for y_i in range(len(y1_xi_max)):
+        #         if y1_xi_max[y_i] < X.iloc[x_i][y_i]:
+        #             X.iloc[x_i][y_i] = y1_xi_max[y_i]
+
         # Sklearn input validation
         X, y = check_X_y(X, y)  # Check that X and y have correct shape
         self.classes_ = unique_labels(y)  # Store the classes seen during fit
@@ -162,7 +176,7 @@ class SVM(BaseEstimator, ClassifierMixin):
         #         lb = zero
         #         ub = np.inf
         #
-        con1 = optimize.LinearConstraint(y, 0, 0)
+        con1 = optimize.LinearConstraint(A=y, lb=0, ub=0)
         con2 = {'type': 'ineq', 'fun': lambda a: a}
 
         if not self.positive_weights_only:
@@ -269,7 +283,8 @@ class SVM(BaseEstimator, ClassifierMixin):
         """
         check_is_fitted(self, ['opt_result_', 'sup_idx_', 'sup_X_', 'sup_y_',
                                'sup_alphas_', 'offset_'])
-        sup_X_times_sup_y = ( np.array(self.sup_X_) * self.sup_y_.reshape(len(self.sup_y_), 1)
+        sup_X_times_sup_y = (
+            np.array(self.sup_X_) * self.sup_y_.reshape(len(self.sup_y_), 1)
         )
         weights = np.dot(self.sup_alphas_.T, sup_X_times_sup_y)
 

@@ -40,12 +40,6 @@ def generate_dataset(dataset_name, n_samples):
     else:
         raise ValueError(f"Unrecognized dataset name: {dataset_name}")
 
-    X = X[
-        feature_types['boolean']
-        + feature_types['categoric']
-        + feature_types['continuous']
-    ]
-
     return X, y, feature_types
 
 
@@ -118,12 +112,12 @@ def generate_adult_dataset(
             'z',
         ],
         'categoric': [
-            'workclass',
+            # 'workclass',
             'education',
-            # 'marital-status',
+            'marital-status',
             # 'occupation',
-            # 'relationship',
-            # 'native-country',
+            'relationship',
+            'native-country',
             # 'race',
               'sex',
         ],
@@ -136,6 +130,8 @@ def generate_adult_dataset(
         ],
         'meta': [
             'fnlwgt'
+        ],
+        'hidden': [
         ],
     }
 
@@ -171,6 +167,10 @@ def generate_compas_dataset(
     feature_types : dict<str, array-like>
         Mapping of column names to their type of feature. Used to when
         constructing sklearn pipelines.
+
+
+    Dataset column descriptions:
+        https://wires.onlinelibrary.wiley.com/doi/full/10.1002/widm.1452
     """
 
     # Import dataset
@@ -214,11 +214,11 @@ def generate_compas_dataset(
 
     quantile_features = []
     for cont_feat in [
-        # 'age',
-        # 'decile_score',
+        'age',
         'juv_fel_count',
+        'juv_misd_count',
+        'juv_other_count',
         'priors_count',
-        # 'v_decile_score',
     ]:
         for q in [
                 .1,
@@ -236,16 +236,26 @@ def generate_compas_dataset(
     feature_types = {
         'boolean': [
             'z',
-        ],# + quantile_features,
+        ] + quantile_features,
         'categoric': [
-            'gender',
             'age_cat',
-            'score_text',
-            'v_score_text',
+            'c_charge_degree',
+            'gender',
         ],
         'continuous': [
+            # 'age',
+            # 'juv_fel_count',
+            # 'juv_misd_count',
+            # 'juv_other_count',
+            # 'priors_count',
         ],
         'meta': [
+        ],
+        'hidden': [
+            'decile_score',
+            'v_decile_score',
+            'score_text',
+            'v_score_text',
         ],
     }
 
@@ -288,7 +298,7 @@ def generate_boston_housing_dataset(n=10_000):
 
     quantile_features = []
     for cont_feat in [
-            'B',
+            # 'B',
             'CRIM',
             'ZN',
             'RM',
@@ -298,6 +308,8 @@ def generate_boston_housing_dataset(n=10_000):
                 # .05,
                 # .1,
                 .25,
+                .5,
+                .75,
         ]:
             f = f"{cont_feat}__{q}"
             df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
@@ -335,6 +347,8 @@ def generate_boston_housing_dataset(n=10_000):
         'target': [
             'MEDV',  # Median value of owner-occupied homes in $1000's],
         ],
+        'hidden': [
+        ],
     }
 
     return X, y, feature_types
@@ -371,6 +385,7 @@ def generate_acs_income(n=10_000, state=None):
     df = X.copy()
     df['y'] = y
     df['y'] = df['y'].astype(int)
+    del X, y
 
     # Take sample if possible
     if n < len(df):
@@ -379,27 +394,10 @@ def generate_acs_income(n=10_000, state=None):
         df = df.sample(n, replace=True)
 
     # Specify the protected attribute `z`
-    df['z'] = (df['RAC1P'] == 1).astype(int)
+    z_col = 'RAC1P'
+    df['z'] = (df[z_col] == 1).astype(int)
 
     df = df.fillna(-1)
-
-    quantile_features = []
-    for cont_feat in [
-            'AGEP',
-            # 'SCHL',
-            # 'WKHP',
-    ]:
-        for q in [
-                .25,
-                .5,
-                .75,
-        ]:
-            f = f"{cont_feat}__{q}"
-            df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
-            quantile_features.append(f)
-
-    y = df['y'].copy()
-    X = df.drop(columns=['RAC1P', 'y'])
 
     # Features
     # --------
@@ -421,6 +419,22 @@ def generate_acs_income(n=10_000, state=None):
     #   - 7: Native Hawaiian and Other Pacific Islander alone
     #   - 8: Some Other Race alone
     #   - 9: Two or More Races
+    quantile_features = []
+    for cont_feat in [
+            'AGEP',
+            'SCHL',
+            # 'WKHP',
+    ]:
+        for q in [
+                .05,
+                .15,
+                .5,
+                .85,
+                .95,
+        ]:
+            f = f"{cont_feat}__{q}"
+            df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
+            quantile_features.append(f)
 
     feature_types = {
         'boolean': [
@@ -430,8 +444,8 @@ def generate_acs_income(n=10_000, state=None):
         'categoric': [
             'COW',
             'MAR',
-            'OCCP',
-            'POBP',
+            # 'OCCP',
+            # 'POBP',
         ],
         'continuous': [
         ],
@@ -440,5 +454,19 @@ def generate_acs_income(n=10_000, state=None):
         'target': [
         ],
     }
+
+
+    # Split into inputs and target variables
+    y = df['y']
+    X = df.copy().drop(columns=['y', z_col])
+    del df
+
+    # NOTE: 05/20/2023
+    # Resampling messes up the feature expectations. Don't do this if you're
+    # doing IRL.
+    #
+    # Balance the positive and negative classes
+    rus = RandomUnderSampler(sampling_strategy=1)
+    X, y = rus.fit_resample(X, y)
 
     return X, y, feature_types

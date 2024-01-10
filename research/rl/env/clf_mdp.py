@@ -127,9 +127,20 @@ class ClassificationMDP:
         # values with defaults.
         logging.debug('\nFitting state_reducer_ ...')
         for x in min_freq_fill_pcts.keys():
-            min_freq, default_val= min_freq_fill_pcts[x]
+            min_freq, default_val = min_freq_fill_pcts[x]
             freq = clf_df.groupby(x).size() / len(clf_df)
-            for x_val in (freq[freq < min_freq]).index:
+            mean_target_rel_delta = (clf_df.groupby(x)['y'].mean() - clf_df['y'].mean()) / clf_df['y'].mean()
+            # NEW as of 01/07/2024
+            # Only use default override for categorical variables if it has a
+            # relative mean target encoding > MIN_TARGET_MEAN_ENC_REL_DELTA and
+            # its freq > min_freq, OR if its freq is 3x more than min_freq.
+            # This is intending to make it so that I can add more categorical
+            # variables in datasets without it taking so long.
+            for x_val in (freq[freq < 1*min_freq]).index:
+                # MIN_TARGET_MEAN_ENC_REL_DELTA = .1
+                # if mean_target_rel_delta.loc[x_val] > MIN_TARGET_MEAN_ENC_REL_DELTA and freq[x_val] > min_freq:
+                #     logging.debug(f"\n\t\tBypassing category override; {x}: {x_val}, freq={freq[x_val]:.3f}, y_rel_delta={mean_target_rel_delta[x_val]:.3f}")
+                #     continue
                 try:
                     if x not in self.state_reducer_:
                         self.state_reducer_[x] = {}

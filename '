@@ -32,7 +32,6 @@ cp = sns.color_palette()
 # Objective looup
 OBJ_LOOKUP_BY_NAME = {
     'Acc': AccuracyObjective,
-    'AccPar': AccuracyParityObjective,
     'DemPar': DemographicParityObjective,
     'EqOpp': EqualOpportunityObjective,
     'FPRPar': FalsePositiveRateParityObjective,
@@ -40,10 +39,6 @@ OBJ_LOOKUP_BY_NAME = {
     'FNRPar': FalseNegativeRateParityObjective,
     'PredPar': PredictiveParityObjective,
     'OppPredPar': OppositePredictiveParityObjective,
-    'PR_Z0': GroupPositiveRateZ0Objective,
-    'PR_Z1': GroupPositiveRateZ1Objective,
-    'NR_Z0': GroupNegativeRateZ0Objective,
-    'NR_Z1': GroupNegativeRateZ1Objective,
     'TPR_Z0': GroupTruePositiveRateZ0Objective,
     'TPR_Z1': GroupTruePositiveRateZ1Objective,
     'TNR_Z0': GroupTrueNegativeRateZ0Objective,
@@ -316,7 +311,7 @@ def generate_expert_algo_lookup(feature_types):
         'RedBoundedGroupLoss': bgl_wrapper,
         'COMPAS': compas_score_high,
         # Initial policies
-        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.15, .15]),
+        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.05, .05]),
         'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=[.05, .05]),
         'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=[.05, .05]),
         'HardtFPRNoisy': UnfairNoisyClassifier(clf=fpr_wrapper, prob=[.05, .05]),
@@ -795,16 +790,15 @@ def run_trial_source_domain(
         )
         try:
             allow_pos_weights = not exp_info['ALLOW_NEG_WEIGHTS']
-            randomly_simluate_stuck = np.random.rand()
-            if randomly_simluate_stuck < .33 or is_stuck_in_loop:
+            if is_stuck_in_loop:
                 is_stuck_in_loop = False
                 # Randomly sample 1 or 2 negative samples (learned policies)
-                n_samples = max(1, np.random.choice(int(np.log((i+1)**2))+1))
+                n_samples = np.random.choice(2) + 1
                 pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].index
                 neg_idx = X_irl[exp_info['N_EXPERT_DEMOS']:].sample(n_samples).index
                 _X_irl = pd.concat([X_irl.loc[pos_idx], X_irl.loc[neg_idx]])
                 _y_irl = pd.concat([y_irl.loc[pos_idx], y_irl.loc[neg_idx]])
-                logging.info(f"\t\tStuck in loop or randomized sample: sampling {n_samples} random negative demos")
+                logging.info(f"\t\tStuck in loop: sampling {n_samples} random negative demo")
                 print('Sampled IRL points for SVM')
                 irl_display = _X_irl.copy()
                 irl_display['is_expert'] = _y_irl.copy()
@@ -814,8 +808,6 @@ def run_trial_source_domain(
                 _y_irl = y_irl
             svm = SVM(positive_weights_only=allow_pos_weights).fit(_X_irl, _y_irl)
         except ValueError as e:
-            if e.args[0] != 'No support vectors found.':
-                raise(e)
             logging.info('\t\tAllowing negative weights.')
             svm = SVM(positive_weights_only=False).fit(X_irl, y_irl)
 
@@ -886,8 +878,8 @@ def run_trial_source_domain(
         mu_history.append(muj)
         mu_hold_history.append(muj_hold)
         mu_perf_hold_history.append(muj_perf_hold)
-        logging.info(f"\t\t muL[{i}] \t\t= {str(np.round(muj, 2)).replace('0.', '.')}")
-        logging.debug(f"\t\t muL_hold[{i}] = {np.round(muj_hold, 2)}")
+        logging.info(f"\t\t muL[{i}] = {np.round(muj, 3)}")
+        logging.debug(f"\t\t muL_hold[{i}] = {np.round(muj_hold, 3)}")
 
         # Append policy's feature expectations to irl clf dataset
         X_irl_learn_i = pd.DataFrame(np.array([muj]), columns=feat_obj_set_cols)
@@ -902,6 +894,8 @@ def run_trial_source_domain(
             muE,
             mu_history,
             dot_weights_feat_exp=exp_info['DOT_WEIGHTS_FEAT_EXP'],
+            encourage_even_weights=exp_info['IRL_ERROR_ENCOURAGE_EVEN_WEIGHTS'],
+            encourage_uneven_weights=exp_info['IRL_ERROR_ENCOURAGE_UNEVEN_WEIGHTS'],
         )
         # Do it for the hold-out set as well.
         ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(
@@ -909,6 +903,8 @@ def run_trial_source_domain(
             muE_hold,
             mu_hold_history,
             dot_weights_feat_exp=exp_info['DOT_WEIGHTS_FEAT_EXP'],
+            encourage_even_weights=exp_info['IRL_ERROR_ENCOURAGE_EVEN_WEIGHTS'],
+            encourage_uneven_weights=exp_info['IRL_ERROR_ENCOURAGE_UNEVEN_WEIGHTS'],
         )
         mu_best_history.append(mu_history[best_j])
         mu_best_hold_history.append(mu_hold_history[best_j])
@@ -917,11 +913,11 @@ def run_trial_source_domain(
         t_hold.append(ti_hold)
         mu_delta_l2norm_hist.append(mu_delta_l2norm)
         mu_delta_l2norm_hold_hist.append(mu_delta_l2norm_hold)
-        logging.info(f"\t\t Best mu_delta[{i}] \t= {str(np.round(mu_delta, 2)).replace('0.', '.')}")
-        logging.info(f"\t\t Best mu_delta_hold[i] \t= {str(np.round(mu_delta_hold, 2)).replace('0.', '.')}")
+        logging.info(f"\t\t Best mu_delta[{i}] \t= {np.round(mu_delta, 3)}")
+        logging.info(f"\t\t Best mu_delta_hold[i] \t= {np.round(mu_delta_hold, 3)}")
         logging.info(f"\t\t t[{i}] \t\t= {t[i]:.5f}")
         logging.info(f"\t\t t_hold[i] \t= {t_hold[i]:.5f}")
-        logging.info(f"\t\t weights[{i}] \t= {str(np.round(weights[i], 2)).replace('0.', '.')}")
+        logging.info(f"\t\t weights[{i}] \t= {np.round(weights[i], 3)}")
 
         # If reached maximum iterations
         if i >= exp_info['MAX_ITER'] - 1:
@@ -942,13 +938,6 @@ def run_trial_source_domain(
             if (exp_info['ALLOW_NEG_WEIGHTS'] or np.all(wi > -1e-5)):
                 done = True
                 break
-        # Check if a new best error has been found in last i/2 iterations. This
-        # is essentially a "smart" convervence to not waste time on more
-        # iterations if it's not improving.
-        elif (i - np.argsort(t)[0]) > exp_info['EARLY_STOP_NO_NEW_BEST_ITERS']:
-            logging.info(f"\n\t\tNo new best in last {exp_info['EARLY_STOP_NO_NEW_BEST_ITERS']} iterations, so stopping early.")
-            done = True
-            break
         # Check if loop is stuck in local optimum by checking if error and
         # weights are the same as previous iteration.
         elif (
@@ -971,8 +960,8 @@ def run_trial_source_domain(
 
     # If solution not sufficient for use, exit early
     if min(t) > exp_info['IGNORE_RESULTS_EPSILON']:
-        logging.info(f"IGNORING RESULTS BECAUSE BEST ERROR {min(t):.3f} > {exp_info['IGNORE_RESULTS_EPSILON']:.3f}")
-        return False, None, None, None, None, None, None, None
+        logging.info('IGNORING RESULTS BECAUSE ERROR IS ABOVE IGNORE_RESULTS_EPSILON')
+        return False, None, None, None, None, None, None
 
     ##
     # Book keeping stuff for the trial.
@@ -1767,7 +1756,6 @@ def run_experiment(
 
     results = []
     trial_i = 0
-    target_clf_pol = None
     while trial_i < exp_info['N_TRIALS']:
         logging.info(f"\n\nTRIAL {trial_i}\n")
 
@@ -1875,10 +1863,7 @@ def run_behavior_clone_experiment(
                 feature_types=source_feature_types,
             )
 
-        if (
-             'ACSIncome__' in exp_info['DATASET'] and
-             'ACSIncome__' in exp_info['TARGET_DATASET']
-        ):
+        if exp_info['TARGET_DATASET'] is not None and not exp_info['EXPERT_CANNOT_PREDICT_IN_TARGET']:
             muE_target, muE_perf_target, muL_target_hold, muL_perf_target_hold, _ = \
                 run_behavior_cloning_trial_target_domain(
                     exp_info,
@@ -1943,38 +1928,35 @@ def plot_results_source_domain_only(
     perf_objective_set_names,
     expert_algos,
     dataset,
+    mu_noise_factor=0,
+    perf_noise_factor=0,
+    w_noise_factor=0,
+    mu_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
+    perf_hue_order=['Expert', 'Learned (FairIRL)', 'Learned (Beh Clone)'],
+    w_hue_order=[None, 'wL (FairIRL)', 'wL (FairIRLFO)'],
+    irl_methods_to_exclude=[
+        'FairIRLDeNormed',
+        'FairIRLFODeNormed',
+        'FairIRLNorm2',
+    ],
     extra_skip_conditions=(lambda info: False),
     extra_title=None,
-    figsize=(12, 4),
-    irl_methods_to_exclude=['FairIRLDeNormed', 'FairIRLFODeNormed', 'FairIRLNorm2'],
-    max_exp_timestamp=None,
-    max_mu_value=None,
     min_exp_timestamp=None,
+    max_exp_timestamp=None,
     min_mu_value=None,
-    min_perf_value=None,
+    max_mu_value=None,
     min_w_value=None,
-    mu_hue_order=['muE', 'muL (FairIRL)', 'muL (FairIRLFO)'],
-    mu_leg_ax=0,
-    mu_noise_factor=0,
-    mu_whis=[5, 95],
-    mu_ylim=(0, 1.05),
+    min_perf_value=None,
     mu_yticks=[.4, .5, .6, .7, .8, .9, 1],
-    palette=cp,
-    perf_hue_order=['Expert', 'Learned (FairIRL)', 'Learned (Beh Clone)'],
-    perf_leg_ax=0,
-    perf_noise_factor=0,
-    perf_whis=[5, 95],
-    perf_ylim=(0, 1.05),
     perf_yticks=[.4, .5, .6, .7, .8, .9, 1],
-    plot_type='boxplot',
-    size_mult=1,
-    w_hue_order=[None, 'wL (FairIRL)', 'wL (FairIRLFO)'],
-    w_leg_ax=0,
-    w_noise_factor=0,
-    w_palette=cp,
-    w_whis=[5, 95],
+    w_yticks = [-.2, 0, .2, .4, .6, .8, 1],
+    mu_ylim=(0, 1.05),
+    perf_ylim=(0, 1.05),
     w_ylim=(-.5, 1.05),
-    w_yticks=[-.2, 0, .2, .4, .6, .8, 1],
+    mu_whis=[5, 95],
+    perf_whis=[5, 95],
+    w_whis=[5, 95],
+    size_mult=1,
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -1985,7 +1967,7 @@ def plot_results_source_domain_only(
     fig, axes = plt.subplots(
         3,
         n_exp,
-        figsize=figsize,
+        figsize=(0.55*size_mult*n_exp*n_feat_exp, 4.8*size_mult),
         height_ratios=[1.5,1,1.5],
     )
 
@@ -2031,6 +2013,10 @@ def plot_results_source_domain_only(
                 index_col=None,
             )
             info = json.load(open(f"{path_prefix}/exp_info/{info_file}"))
+
+            # display(info_file)
+            # display(info['EXPERT_ALGO'], info['IRL_METHOD'])
+            # display(result)
 
             # Filter to only experiments for the input `expert_algo`
             if (
@@ -2127,56 +2113,36 @@ def plot_results_source_domain_only(
             perf_df = perf_df.query('Value >= @min_perf_value')
 
         # Plot boxplot for feature expectations
-        if plot_type == 'boxplot':
-            sns.boxplot(
-                x=mu_df['Feature Expectation'],
-                y=mu_df['Value'],
-                hue=mu_df['Demo Producer'],
-                hue_order=mu_hue_order,
-                ax=ax1,
-                fliersize=0,  # Remove outliers
-                saturation=1,
-                palette=list(cp[0:3])+ list(cp[6:]),
-                linewidth=.2,
-                whis=mu_whis,
-                dodge=True,
-                width=.65,
-                gap=.2,
-            )
-        elif plot_type == 'boxenplot':
-            sns.boxenplot(
-                x=mu_df['Feature Expectation'],
-                y=mu_df['Value'],
-                hue=mu_df['Demo Producer'],
-                hue_order=mu_hue_order,
-                ax=ax1,
-                # fliersize=0,  # Remove outliers
-                saturation=1,
-                palette=list(cp[0:3])+ list(cp[6:]),
-                linewidth=.2,
-                line_kws=dict(linewidth=.8),  # used for median
-                # whis=mu_whis,
-                # size=2,
-                # dodge=True,
-                width_method='linear',
-                k_depth=4,
-                width=.65,
-                gap=.2,
-                showfliers=False,
-            )
-        else:
-            raise ValueError(f"Invalid plot type: {plot_type}")
-
+        sns.boxenplot(
+            x=mu_df['Feature Expectation'],
+            y=mu_df['Value'],
+            hue=mu_df['Demo Producer'],
+            hue_order=mu_hue_order,
+            ax=ax1,
+            # fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list(cp[0:3])+ list(cp[6:]),
+            linewidth=.2,
+            line_kws=dict(linewidth=.8),  # used for median
+            # whis=mu_whis,
+            # size=2,
+            # dodge=True,
+            width_method='linear',
+            k_depth=4,
+            width=.65,
+            gap=.2,
+            showfliers=False,
+        )
         ax1.set_ylabel(None)
         ax1.set_xlabel(None)
 
-        if exp_i == mu_leg_ax:
+        if exp_i == 0:
             ax1.legend(
                 title=None,
-                ncol=1,
-                loc='best',
+                ncol=3,
+                loc='upper left',
                 labelspacing=0,
-                columnspacing=1,
+                columnspacing=1.5,
                 # bbox_to_anchor=(-1.7, 0),
             )
         else:
@@ -2197,52 +2163,37 @@ def plot_results_source_domain_only(
         w_df = w_df.sort_values(['Weight', 'IRL Method'])
 
         # Plot boxplot for weights
-        if plot_type == 'boxplot':
-            sns.boxplot(
-                x=w_df['Weight'],
-                y=w_df['Value'],
-                hue=w_df['IRL Method'],
-                hue_order=w_hue_order,
-                ax=ax2,
-                fliersize=0,  # Remove outliers
-                saturation=1,
-                palette=w_palette,
-                linewidth=.2,
-                whis=mu_whis,
-                dodge=True,
-                width=.65,
-                gap=.2,
-            )
-        elif plot_type == 'boxenplot':
-            sns.boxenplot(
-                x=w_df['Weight'],
-                y=w_df['Value'],
-                hue=w_df['IRL Method'],
-                hue_order=w_hue_order,
-                ax=ax2,
-                saturation=1,
-                palette=w_palette,
-                linewidth=.2,
-                line_kws=dict(linewidth=.8),  # used for median
-                width_method='linear',
-                k_depth=4,
-                width=.65,
-                gap=.2,
-                showfliers=False,
-            )
-        else:
-            raise ValueError(f"Invalid plot type: {plot_type}")
-
+        sns.boxenplot(
+            x=w_df['Weight'],
+            y=w_df['Value'],
+            hue=w_df['IRL Method'],
+            hue_order=w_hue_order,
+            ax=ax2,
+            # fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list(cp[0:3])+ list(cp[6:]),
+            linewidth=.2,
+            line_kws=dict(linewidth=.8),  # used for median
+            # whis=w_whis,
+            # size=2,
+            # dodge=True,
+            width_method='linear',
+            k_depth=4,
+            width=.65,
+            gap=.2,
+            showfliers=False,
+        )
         ax2.set_ylabel(None)
         ax2.set_xlabel(None)
 
-        if exp_i == w_leg_ax:
+        if exp_i == 0:
             ax2.legend(
                 title=None,
                 ncol=2,
-                loc='best',
+                loc='upper right',
                 labelspacing=.1,
                 columnspacing=.5,
+                # bbox_to_anchor=(-1.45, -.8),
             )
         else:
             ax2.get_legend().remove()
@@ -2257,55 +2208,38 @@ def plot_results_source_domain_only(
             ax2.set_yticklabels([])
 
         # Plot boxplot for performance measures
-        if plot_type == 'boxplot':
-            sns.boxplot(
-                x=perf_df['Performance Measures'],
-                y=perf_df['Value'],
-                hue=perf_df['Demo Producer'],
-                order=perf_objective_set_names,
-                hue_order=perf_hue_order,
-                ax=ax3,
-                fliersize=0,  # Remove outliers
-                saturation=1,
-                palette=palette,
-                linewidth=.2,
-                whis=mu_whis,
-                dodge=True,
-                width=.65,
-                gap=.2,
-            )
-        elif plot_type == 'boxenplot':
-            sns.boxenplot(
-                x=perf_df['Performance Measures'],
-                y=perf_df['Value'],
-                hue=perf_df['Demo Producer'],
-                order=perf_objective_set_names,
-                hue_order=perf_hue_order,
-                ax=ax3,
-                saturation=1,
-                palette=palette,
-                linewidth=.2,
-                line_kws=dict(linewidth=.8),  # used for median
-                width_method='linear',
-                k_depth=4,
-                width=.65,
-                gap=.2,
-                showfliers=False,
-            )
-        else:
-            raise ValueError(f"Invalid plot type: {plot_type}")
-
+        sns.boxenplot(
+            x=perf_df['Performance Measures'],
+            y=perf_df['Value'],
+            hue=perf_df['Demo Producer'],
+            order=perf_objective_set_names,
+            hue_order=perf_hue_order,
+            ax=ax3,
+            # fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=list(cp[0:3])+ list(cp[6:]),
+            linewidth=.2,
+            line_kws=dict(linewidth=.8),  # used for median
+            # whis=perf_whis,
+            # size=2,
+            # dodge=True,
+            width_method='linear',
+            k_depth=4,
+            width=.65,
+            gap=.2,
+            showfliers=False,
+        )
         ax3.set_ylabel(None)
         ax3.set_xlabel(None)
 
-        if exp_i == perf_leg_ax:
+        if exp_i == len(expert_algos)-1:
             ax3.legend(
                 title=None,
                 ncol=3,
-                loc='best',
+                loc='lower left',
                 labelspacing=0,
                 columnspacing=1.5,
-                # bbox_to_anchor=(-2.08, -.48),
+                bbox_to_anchor=(-2.08, -.48),
             )
         else:
             ax3.get_legend().remove()
@@ -2380,8 +2314,7 @@ def plot_results_target_domain(
     perf_whis=[5, 95],
     size_mult=1,
     mu_cp=cp,
-    figsize=(12, 4),
-    palette=cp,
+    perf_cp=list([(.6,.6,.6)]) + list(cp[0:3]),
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -2390,17 +2323,19 @@ def plot_results_target_domain(
     # Plot boxplot for feature expectations
     n_exp = len(expert_algos)
     n_feat_exp = len(feat_objective_set_names)
+    # fig, axes = plt.subplots(
+    #     3,
+    #     n_exp,
+    #     figsize=(0.55*size_mult*n_exp*n_feat_exp, 4.8*size_mult),
+    #     height_ratios=[1.5,1,1.5],
+    # )
 
     fig, axes = plt.subplots(
         2,
         n_exp,
-        figsize=figsize,
+        figsize=(.55*size_mult*n_exp*n_feat_exp, 3.6*size_mult),
         height_ratios=[1, 1],
     )
-
-    mu_dfs = []
-    w_dfs = []
-    perf_dfs = []
 
     for exp_i, expert_algo in enumerate(expert_algos):
 
@@ -2518,11 +2453,7 @@ def plot_results_target_domain(
 
 
         w_df = pd.DataFrame(w_rows, columns=w_cols)
-
-        mu_dfs.append(mu_df.copy())
-        perf_dfs.append(perf_df.copy())
-        w_dfs.append(w_df.copy())
-
+        w_df['Value'] += w_noise_factor*(np.random.rand(len(w_df)) - .5)
         mu_df['Demo Producer'] = (
             mu_df['Demo Producer'].str.replace('muE_target', r'$\mu^E_{TARGET}$')
         )
@@ -2590,19 +2521,16 @@ def plot_results_target_domain(
         perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
         w_df = w_df.sort_values(['Weight', 'IRL Method'])
 
-        # Filter out empty arrays that were added when target can't be computed
-        mu_df = mu_df.query('Value != 0')
-        perf_df = perf_df.query('Value != 0')
-
         # Feature Expecations
         sns.boxenplot(
             x=mu_df['Feature Expectation'],
             y=mu_df['Value'],
             hue=mu_df['Demo Producer'],
-            hue_order=mu_hue_order,
+            # hue_order=mu_hue_order,
             ax=ax1,
             # fliersize=0,  # Remove outliers
             saturation=1,
+            palette=list(cp[0:3])+ list(cp[6:]),
             linewidth=.2,
             line_kws=dict(linewidth=.8),  # used for median
             # whis=mu_whis,
@@ -2613,7 +2541,6 @@ def plot_results_target_domain(
             width=.65,
             gap=.2,
             showfliers=False,
-            palette=palette,
         )
         ax1.set_xlabel(None)
         ax1.get_legend().remove()
@@ -2649,7 +2576,7 @@ def plot_results_target_domain(
             ax=ax2,
             # fliersize=0,  # Remove outliers
             saturation=1,
-            palette=palette,
+            palette=perf_cp,
             linewidth=.2,
             line_kws=dict(linewidth=.8),  # used for median
             # whis=perf_whis,
@@ -2691,7 +2618,7 @@ def plot_results_target_domain(
     print(f"SOURCE DATASET: {source_dataset}")
     print(f"TARGET DATASET: {target_dataset}")
 
-    return fig, axes, mu_dfs, w_dfs, perf_dfs
+    return fig, axes, result, mu_df, w_df, perf_df
 
 
 def plot_source_fair_irl_comparisons(
@@ -2729,8 +2656,6 @@ def plot_source_fair_irl_comparisons(
     perf_whis=[5, 95],
     w_whis=[5, 95],
     size_mult=1,
-    palette=cp,
-    figsize=(24, 10),
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -2741,7 +2666,7 @@ def plot_source_fair_irl_comparisons(
     fig, axes = plt.subplots(
         3,
         len(demo_producers),
-        figsize=figsize,
+        figsize=(len(demo_producers)*size_mult*n_feat_exp, 5*size_mult),
         height_ratios=[1,1,1],
     )
     axcol1 = axes[0]
@@ -2785,9 +2710,9 @@ def plot_source_fair_irl_comparisons(
             # Filter to only experiments for the input `expert_algo`
             if (
                 info['EXPERT_ALGO'] != expert_algo
-                or (dataset is not None and info['DATASET'] != dataset)
-                or set(info['FEAT_EXP_OBJECTIVE_NAMES']) != set(feat_objective_set_names)
-                or not set(perf_objective_set_names).issubset(set(info['PERF_MEAS_OBJECTIVE_NAMES']))
+                # or info['DATASET'] != dataset
+                    or set(info['FEAT_EXP_OBJECTIVE_NAMES']) != set(feat_objective_set_names)
+                    or set(info['PERF_MEAS_OBJECTIVE_NAMES']) != set(perf_objective_set_names)
                 or info['IRL_METHOD'] in irl_methods_to_exclude
                     or extra_skip_conditions(info)
             ):
@@ -2911,15 +2836,14 @@ def plot_source_fair_irl_comparisons(
             ax=ax1,
             fliersize=0,  # Remove outliers
             saturation=1,
-            palette=palette,
+            palette=cp,
             linewidth=.5,
             whis=mu_whis,
-            gap=.2,
-            width=.6,
+            width=.75,
         )
         ax1.set_ylabel(None)
         ax1.set_xlabel(None)
-        ax1.legend(loc='best', ncol=len(expert_algos))
+        ax1.legend(loc='lower right', ncol=2)
         ax1.yaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax1.set_yticks(mu_yticks)
         ax1.set_ylim(mu_ylim)
@@ -2935,51 +2859,49 @@ def plot_source_fair_irl_comparisons(
             ax=ax2,
             fliersize=0,  # Remove outliers
             saturation=1,
-            palette=palette,
+            palette=cp,
             linewidth=.5,
             whis=w_whis,
-            gap=.2,
-            width=.6,
+            width=.75,
         )
         ax2.set_ylabel(None)
         ax2.set_xlabel(None)
-        ax2.legend(loc='upper right', ncol=len(expert_algos))
+        ax2.legend(loc='upper right', ncol=2)
         ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax2.set_yticks(w_yticks)
         ax2.set_ylim(w_ylim)
         ax2.set_yticklabels(w_yticks)
 
         # Plot boxplot for performance measures
-        # sns.boxplot(
-        #     x=_perf_df['Performance Measures'],
-        #     y=_perf_df['Value'],
-        #     hue=_perf_df['expert_algo'],
-        #     order=perf_objective_set_names,
-        #     hue_order=expert_algos,
-        #     ax=ax3,
-        #     fliersize=0,  # Remove outliers
-        #     saturation=1,
-        #     palette=palette,
-        #     linewidth=.5,
-        #     whis=perf_whis,
-        #     gap=.2,
-        #     width=.6,
-        # )
-        # ax3.set_ylabel(None)
-        # ax3.set_xlabel(None)
-        # ax3.legend(loc='lower right', ncol=2)
-        # ax3.yaxis.set_major_formatter(FormatStrFormatter('%g'))
-        # ax3.set_yticks(perf_yticks)
-        # ax3.set_ylim(perf_ylim)
-        # ax3.set_yticklabels(perf_yticks)
+        sns.boxplot(
+            x=_perf_df['Performance Measures'],
+            y=_perf_df['Value'],
+            hue=_perf_df['expert_algo'],
+            order=perf_objective_set_names,
+            hue_order=expert_algos,
+            ax=ax3,
+            fliersize=0,  # Remove outliers
+            saturation=1,
+            palette=cp,
+            linewidth=.5,
+            whis=perf_whis,
+            width=.75,
+        )
+        ax3.set_ylabel(None)
+        ax3.set_xlabel(None)
+        ax3.legend(loc='lower right', ncol=2)
+        ax3.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax3.set_yticks(perf_yticks)
+        ax3.set_ylim(perf_ylim)
+        ax3.set_yticklabels(perf_yticks)
 
         # Set title on top of fig 1
         ax1.set_title(f"{demo_producer} Feature Expectations")
         ax2.set_title(f"{demo_producer} Weights")
-        # ax3.set_title(f"{demo_producer} Performance Measures")
+        ax3.set_title(f"{demo_producer} Performance Measures")
 
     plt.tight_layout()
-    plt.subplots_adjust(wspace=.08, hspace=.7)
+    # plt.subplots_adjust(wspace=.03, hspace=.9)
 
     print(f"DATASET: {dataset}")
 
@@ -3035,7 +2957,6 @@ def plot_target_fair_irl_comparisons(
     perf_whis=[5, 95],
     w_whis=[5, 95],
     size_mult=1,
-    figsize=(24, 10),
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -3046,7 +2967,7 @@ def plot_target_fair_irl_comparisons(
     fig, axes = plt.subplots(
         3,
         len(feat_demo_producers),
-        figsize=figsize,
+        figsize=(len(feat_demo_producers)*size_mult*n_feat_exp, 7*size_mult),
         height_ratios=[1,1,1],
     )
     axcol1 = axes[0]
@@ -3194,6 +3115,10 @@ def plot_target_fair_irl_comparisons(
         else:
             w_dfs = pd.concat([w_dfs, w_df])
 
+    display(mu_dfs.sample(5))
+    display(perf_dfs.sample(5))
+    display(w_dfs.sample(5))
+
     for dp_i, (feat_demo_producer, perf_demo_producer, w_demo_producer) \
             in enumerate(zip(feat_demo_producers, perf_demo_producers, w_demo_producers)):
         if len(feat_demo_producers) > 1:
@@ -3249,7 +3174,7 @@ def plot_target_fair_irl_comparisons(
         )
         ax1.set_ylabel(None)
         ax1.set_xlabel(None)
-        ax1.legend(loc='best', ncol=2)
+        ax1.legend(loc='lower right', ncol=2)
         ax1.yaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax1.set_yticks(mu_yticks)
         ax1.set_ylim(mu_ylim)
@@ -3272,7 +3197,7 @@ def plot_target_fair_irl_comparisons(
         )
         ax2.set_ylabel(None)
         ax2.set_xlabel(None)
-        ax2.legend(loc='best', ncol=2)
+        ax2.legend(loc='upper right', ncol=2)
         ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax2.set_yticks(w_yticks)
         ax2.set_ylim(w_ylim)
@@ -3295,7 +3220,7 @@ def plot_target_fair_irl_comparisons(
         )
         ax3.set_ylabel(None)
         ax3.set_xlabel(None)
-        ax3.legend(loc='best', ncol=2)
+        ax3.legend(loc='lower right', ncol=2)
         ax3.yaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax3.set_yticks(perf_yticks)
         ax3.set_ylim(perf_ylim)
@@ -3308,5 +3233,7 @@ def plot_target_fair_irl_comparisons(
 
     plt.tight_layout()
     plt.subplots_adjust(wspace=.03, hspace=.9)
+
+    print(f"DATASET: {dataset}")
 
     return fig, axes, mu_dfs, w_dfs, perf_dfs

@@ -177,6 +177,159 @@ class AccuracyObjective(LinearObjective):
 
         return c
 
+class AccuracyParityObjective(AbsoluteValueObjective):
+
+    def __init__(self):
+        self.name = 'AccPar'
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_y_giv_z_eq_0 = (
+            ((demo['yhat'] == demo['y']) & (demo['z'] == 0)).sum()
+            / (demo['z'] == 0).sum()
+        )
+        p_yhat_eq_y_giv_z_eq_1 = (
+            ((demo['yhat'] == demo['y']) & (demo['z'] == 1)).sum()
+            / (demo['z'] == 1).sum()
+        )
+        mu = 1 - max([
+            p_yhat_eq_y_giv_z_eq_0 - p_yhat_eq_y_giv_z_eq_1,
+            p_yhat_eq_y_giv_z_eq_1 - p_yhat_eq_y_giv_z_eq_0,
+        ])
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _compute_A_ub_row__split1(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=y|z=0) >= P(yhat=y|z=1)
+            ```
+        which is Accuracy Parity opt_problem 1.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhaty_z0 = (ldf['z'] == 0) & (ldf['yhat'] == ldf['y'])
+        filt__yhaty_z1 = (ldf['z'] == 1) & (ldf['yhat'] == ldf['y'])
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum() / 2
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum() / 2
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhaty_z0, 'A_ub'] = -1 / p_z0
+        ldf.loc[filt__yhaty_z1, 'A_ub'] =  1 / p_z1
+
+        return ldf['A_ub']
+
+    def _compute_A_ub_row__split2(self, ldf):
+        """
+        Constructs the linear equation for the constraint that
+            ```
+            P(yhat=y|z=0) <= P(yhat=y|z=1)
+            ```
+        which is Accuracy Parity opt_problem 1.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        ldf['A_ub'] : pandas.Series<float>
+        """
+        n_actions = 2
+        ldf = ldf.copy()
+        filt__yhaty_z0 = (ldf['z'] == 0) & (ldf['yhat'] == ldf['y'])
+        filt__yhaty_z1 = (ldf['z'] == 1) & (ldf['yhat'] == ldf['y'])
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum() / 2
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum() / 2
+        ldf['A_ub'] = 0.0
+        ldf.loc[filt__yhaty_z0, 'A_ub'] =  1 / p_z0
+        ldf.loc[filt__yhaty_z1, 'A_ub'] = -1 / p_z1
+
+        return ldf['A_ub']
+
+    def _construct_reward__split1(self, ldf):
+        """
+        Constructs the reward function for Accuracy Parity  opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=y|z=0) >= P(yhat=y|z=1), in
+        which case the reward penalizes giving the Z=0 group the correct
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhaty_z0 = (ldf['z'] == 0) & (ldf['yhat'] == ldf['y'])
+        filt__yhaty_z1 = (ldf['z'] == 1) & (ldf['yhat'] == ldf['y'])
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum() / 2
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum() / 2
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhaty_z0, 'r'] = -1 / p_z0
+        ldf.loc[filt__yhaty_z1, 'r'] =  1 / p_z1
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+
+        return c
+
+    def _construct_reward__split2(self, ldf):
+        """
+        Constructs the reward function for Accuracy Parity  opt_problem 1.
+        opt_problem 1 is when we constrain P(yhat=y|z=0) <= P(yhat=y|z=1), in
+        which case the reward penalizes giving the Z=1 group the correct
+        prediction.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        -------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhaty_z0 = (ldf['z'] == 0) & (ldf['yhat'] == ldf['y'])
+        filt__yhaty_z1 = (ldf['z'] == 1) & (ldf['yhat'] == ldf['y'])
+        p_z0 = ldf[ldf['z'] == 0]['mu0'].sum() / 2
+        p_z1 = ldf[ldf['z'] == 1]['mu0'].sum() / 2
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhaty_z0, 'r'] =  1 / p_z0
+        ldf.loc[filt__yhaty_z1, 'r'] = -1 / p_z1
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+
+        return c
+
 
 class DemographicParityObjective(AbsoluteValueObjective):
 
@@ -949,6 +1102,228 @@ class FalseNegativeRateParityObjective(AbsoluteValueObjective):
         return c
 
 
+class PredictiveParityObjective(Objective):
+    """
+    Not intended for optimization, just feature expectations. Can't optimize
+    this with LP, since it's not a linear measure.
+    """
+
+    def __init__(self):
+        self.name = 'PredPar'
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_y_eq_1_giv_yhat_eq_1_z_eq_0 = (
+            ((demo['yhat'] == 1) & (demo['y'] == 1) & (demo['z'] == 0)).sum()
+            / ((demo['yhat'] == 1) & (demo['z'] == 0)).sum()
+        )
+        p_y_eq_1_giv_yhat_eq_1_z_eq_1 = (
+            ((demo['yhat'] == 1) & (demo['y'] == 1) & (demo['z'] == 1)).sum()
+            / ((demo['yhat'] == 1) & (demo['z'] == 1)).sum()
+        )
+        mu = 1 - max([
+            p_y_eq_1_giv_yhat_eq_1_z_eq_0 - p_y_eq_1_giv_yhat_eq_1_z_eq_1,
+            p_y_eq_1_giv_yhat_eq_1_z_eq_1 - p_y_eq_1_giv_yhat_eq_1_z_eq_0,
+        ])
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+
+class OppositePredictiveParityObjective(Objective):
+    """
+    Not intended for optimization, just feature expectations. Can't optimize
+    this with LP, since it's not a linear measure.
+    """
+
+    def __init__(self):
+        self.name = 'OppPredPar'
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_y_eq_0_giv_yhat_eq_0_z_eq_0 = (
+            ((demo['yhat'] == 0) & (demo['y'] == 0) & (demo['z'] == 0)).sum()
+            / ((demo['yhat'] == 0) & (demo['z'] == 0)).sum()
+        )
+        p_y_eq_0_giv_yhat_eq_0_z_eq_1 = (
+            ((demo['yhat'] == 0) & (demo['y'] == 0) & (demo['z'] == 1)).sum()
+            / ((demo['yhat'] == 0) & (demo['z'] == 1)).sum()
+        )
+        mu = 1 - max([
+            p_y_eq_0_giv_yhat_eq_0_z_eq_0 - p_y_eq_0_giv_yhat_eq_0_z_eq_1,
+            p_y_eq_0_giv_yhat_eq_0_z_eq_1 - p_y_eq_0_giv_yhat_eq_0_z_eq_0,
+        ])
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+class GroupPositiveRateZ0Objective(LinearObjective):
+
+    def __init__(self, z=0):
+        self.z = z
+        self.name = f"PR_Z{self.z}"
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_1_giv_z_eq_z = (
+            (
+                (demo['yhat'] == 1) & (demo['z'] == self.z)
+            ).sum() / (demo['z'] == self.z).sum()
+        )
+
+        mu = p_yhat_eq_1_giv_z_eq_z
+
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function component for this objective.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat1_giv_z = (
+            (ldf['z'] == self.z) & (ldf['yhat'] == 1)
+        )
+        # Divide by 2 since ldf has two duplicate rows per state
+        p_z = ldf[ldf['z'] == self.z]['mu0'].sum() / 2
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat1_giv_z, 'r'] = 1 / p_z
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+
+        # Check c sums to 1
+        assert (c.sum() + 1) < 1e-8
+
+        return c
+
+
+class GroupPositiveRateZ1Objective(GroupPositiveRateZ0Objective):
+
+    def __init__(self):
+        super().__init__(z=1)
+
+
+class GroupNegativeRateZ0Objective(LinearObjective):
+
+    def __init__(self, z=0):
+        self.z = z
+        self.name = f"NR_Z{self.z}"
+        super().__init__()
+
+    def compute_feat_exp(self, demo):
+        """
+        Computes the feature expectation representation of the objective on
+        the provided demonstration.
+
+        Parameters
+        ----------
+        demo : pandas.DataFrame
+            Demonstrations. Each demonstration represents an iteration of a
+            trained classifier and its predictions on a hold-out set. Columns:
+                **`X` columns : all input columns (i.e. `X`)
+                yhat : predictions
+                y : ground truth targets
+        """
+        p_yhat_eq_0_giv_z_eq_z = (
+            (
+                (demo['yhat'] == 0) & (demo['z'] == self.z)
+            ).sum() / (demo['z'] == self.z).sum()
+        )
+
+        mu = p_yhat_eq_0_giv_z_eq_z
+
+        if np.isnan(mu):
+            mu = 1
+
+        return mu
+
+    def _construct_reward(self, ldf):
+        """
+        Constructs the reward function component for this objective.
+
+        Parameters
+        ----------
+        ldf : pandas.DataFrame
+            "Lambda dataframe". One row for each state and action combination.
+
+        Returns
+        ------
+        c : np.array<float>, len(2*len(df))
+            The objective function for the linear program.
+        """
+        ldf = ldf.copy()
+        filt__yhat0_giv_z = (
+            (ldf['z'] == self.z) & (ldf['yhat'] == 0)
+        )
+        # Divide by 2 since ldf has two duplicate rows per state
+        p_z = ldf[ldf['z'] == self.z]['mu0'].sum() / 2
+        ldf['r'] = np.zeros(len(ldf))
+        ldf.loc[filt__yhat0_giv_z, 'r'] = 1 / p_z
+        c = -1 * ldf['r']  # Negative since maximizing not minimizing
+
+        # Check c sums to 1
+        assert (c.sum() + 1) < 1e-8
+
+        return c
+
+
+class GroupNegativeRateZ1Objective(GroupNegativeRateZ0Objective):
+
+    def __init__(self):
+        super().__init__(z=1)
+
 class GroupTruePositiveRateZ0Objective(LinearObjective):
 
     def __init__(self, z=0):
@@ -1112,7 +1487,7 @@ class GroupFalsePositiveRateZ0Objective(LinearObjective):
             ).sum() / ((demo['y'] == 0) & (demo['z'] == self.z)).sum()
         )
 
-        mu = 1. - p_yhat_eq_1_giv_y_eq_0_z_eq_z
+        mu = p_yhat_eq_1_giv_y_eq_0_z_eq_z
 
         # Absence should imply 0
         if np.isnan(mu):
@@ -1143,7 +1518,7 @@ class GroupFalsePositiveRateZ0Objective(LinearObjective):
         ldf.loc[filt__yhat1_giv_y0_z, 'r'] = 1 / p_y0_z
         c = -1 * ldf['r']  # Negative since maximizing not minimizing
 
-        return c * -1
+        return c
 
 
 class GroupFalsePositiveRateZ1Objective(GroupFalsePositiveRateZ0Objective):
@@ -1179,7 +1554,7 @@ class GroupFalseNegativeRateZ0Objective(LinearObjective):
             ).sum() / ((demo['y'] == 0) & (demo['z'] == self.z)).sum()
         )
 
-        mu = 1. - p_yhat_eq_1_giv_y_eq_0_z_eq_z
+        mu = p_yhat_eq_1_giv_y_eq_0_z_eq_z
 
         # Absence should imply 1
         if np.isnan(mu):
@@ -1210,7 +1585,7 @@ class GroupFalseNegativeRateZ0Objective(LinearObjective):
         ldf.loc[filt__yhat1_giv_y0_z, 'r'] = 1 / p_y0_z
         c = -1 * ldf['r']  # Negative since maximizing not minimizing
 
-        return c * -1
+        return c
 
 
 class GroupFalseNegativeRateZ1Objective(GroupFalseNegativeRateZ0Objective):

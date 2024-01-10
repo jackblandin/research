@@ -84,6 +84,7 @@ def compute_optimal_policy(
     )
 
     # Pick from one of the policies (if there are multiple).
+    logging.info(f"\n\t\tFound {len(optimal_policies)} optimal policies.")
     sampled_policy = optimal_policies[np.random.choice(len(optimal_policies))]
 
     clf_pol = ClassificationMDPPolicy(
@@ -210,8 +211,7 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
 
 
 def irl_error(
-        w, muE, muL, dot_weights_feat_exp=True, encourage_even_weights=False,
-        encourage_uneven_weights=False,
+        w, muE, muL, dot_weights_feat_exp=True, allow_neg_weights=False,
 ):
     """
     Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
@@ -230,10 +230,9 @@ def irl_error(
         The default value is the typical IRL one. Use the other if all feat
         exp should be non-zero weights. Helps avoid issue of IRL nulling out
         feat exp componets that it has trouble matching.
-    encourage_even_weights : bool, default False
-        If true, multiplies the error by the l2 norm of the weights.
-    encourage_uneven_weights : bool, default False
-        If true, divides the error by the l2 norm of the weights.
+    allow_neg_weights : bool, default False
+        If True, allows positive feature expectation errors to be nulled out
+        even if weights are negative.
 
     Returns
     -------
@@ -246,32 +245,61 @@ def irl_error(
     l2_mu_delta[best_j] : float
         The l2 norm of the muE and muL deltas.
     """
-    mu_deltas = None
-    l2_mu_deltas = None
-    best_err = None
-    best_j = None
+    # mu_deltas = np.zeros((len(muL), muE.shape[1]))
+    # l2_mu_deltas = np.zeros(len(muL))
+    # best_err = np.inf
+    # best_j = None
 
-    mu_deltas = np.zeros((len(muL), muE.shape[1]))
-    l2_mu_deltas = np.zeros(len(muL))
+    # # Find best muj
+    # for j, muj in enumerate(muL):
+    #     # JDB 01/07/2024
+    #     # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
+    #     # adding the muE.mean(axis=0) as a denominator
+    #     mu_deltas[j] = muE.mean(axis=0) - muj
+    #     # JDB 12/05/2023
+    #     # Trying this out. If muj is better, reduce the amount it's considered
+    #     # as an error for feature expectations deltas.
+    #     # But first, check if all weights are positive. Don't want anything
+    #     # to converge to zero error if weights are negative.
+    #     if allow_neg_weights or  np.all(w > -1e-5):
+    #         mu_deltas[j][mu_deltas[j] < 0] = 1 * mu_deltas[j][mu_deltas[j] < 0]
+
+    #     if dot_weights_feat_exp:
+    #         err = np.linalg.norm(np.abs(w) * mu_deltas[j], ord=2)
+    #     else:
+    #         err = np.linalg.norm(np.abs(mu_deltas[j])) * np.linalg.norm(w, ord=2)
+
+    #     if err < best_err:
+    #         best_err = err
+    #         best_j = j
+
+    # 01/08/2024
+    # Trying this out: don't find best muj. Just compute error with most recent
+    # muj and weights.
+    l2_mu_deltas = np.zeros([])
     best_err = np.inf
-    best_j = None
-    # Find best muj
-    for j, muj in enumerate(muL):
-        mu_deltas[j] = muE.mean(axis=0) - muj
+    best_j = len(muL) - 1
 
-        if dot_weights_feat_exp:
-            err = np.linalg.norm(np.abs(w) * np.abs(mu_deltas[j]), ord=2)
-        else:
-            err = np.linalg.norm(np.abs(mu_deltas[j])) * np.linalg.norm(w, ord=2)
 
-        if encourage_even_weights:
-            smallest_w = min(np.abs(w))
-            err = err / (1-smallest_w)
-        elif encourage_uneven_weights:
-            l2_w = np.linalg.norm(w)
-            err = err / l2_w
-        if err < best_err:
-            best_err = err
-            best_j = j
+    mu_deltas = (muE.mean(axis=0) - muL[-1]) / muE.mean(axis=0)
 
-    return best_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]
+    # JDB 01/07/2024
+    # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
+    # adding the muE.mean(axis=0) as a denominator
+    if allow_neg_weights or  np.all(w > -1e-5):
+        mu_deltas[mu_deltas < 0] = 1 * mu_deltas[mu_deltas < 0]
+
+    if dot_weights_feat_exp:
+        err = np.linalg.norm(np.abs(w) * mu_deltas, ord=1)
+    else:
+        err = np.linalg.norm(np.abs(mu_deltas)) * np.linalg.norm(w, ord=1)
+
+    best_err = err
+
+    # If accuracy weight is zero, return infinite error
+    # TODO: remove this
+    if np.allclose(w[0], 0, atol=1e-5):
+        logging.info('\t\tAccuracy weight is zero, infinite error')
+        best_err = np.inf
+
+    return best_err, best_j, mu_deltas, l2_mu_deltas
