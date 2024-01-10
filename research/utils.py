@@ -162,7 +162,7 @@ def sklearn_clf_pipeline(feature_types, clf_inst):
                  OrdinalEncoder(
                      handle_unknown="use_encoded_value",
                      unknown_value=-1,
-                     min_frequency=.1,
+                     min_frequency=.2,
                  ),
             ),
             # ("selector", SelectPercentile(chi2, percentile=50)),

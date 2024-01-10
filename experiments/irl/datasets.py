@@ -453,6 +453,8 @@ def generate_acs_income(n=10_000, state=None):
         ],
         'target': [
         ],
+        'hidden': [
+        ],
     }
 
 

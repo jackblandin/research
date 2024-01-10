@@ -17,6 +17,7 @@ from research.rl.env.objectives import *
 from research.irl.fair_irl import *
 from research.ml.svm import SVM
 from research.utils import *
+from scipy.spatial.distance import cosine
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, KFold
@@ -39,7 +40,7 @@ OBJ_LOOKUP_BY_NAME = {
     'TNRPar': TrueNegativeRateParityObjective,
     'FNRPar': FalseNegativeRateParityObjective,
     'PredPar': PredictiveParityObjective,
-    'OppPredPar': OppositePredictiveParityObjective,
+    'NegPredPar': NegativePredictiveParityObjective,
     'PR_Z0': GroupPositiveRateZ0Objective,
     'PR_Z1': GroupPositiveRateZ1Objective,
     'NR_Z0': GroupNegativeRateZ0Objective,
@@ -313,7 +314,7 @@ def generate_expert_algo_lookup(feature_types):
         'HardtTNRPar': tnr_wrapper,
         'Dummy': dummy_pipe,
         'RedEqOdds': eq_odds_red_wrapper,
-        'RedBoundedGroupLoss': bgl_wrapper,
+        'BoundedGroupLoss': bgl_wrapper,
         'COMPAS': compas_score_high,
         # Initial policies
         'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.15, .15]),
@@ -685,34 +686,49 @@ def run_trial_source_domain(
 
     expert_algo_lookup = generate_expert_algo_lookup(expert_demo_feature_types)
 
+    #
     # Split data into 3 sets.
     #     1. Demo: for computing expert demos AND learning muL - muE diffs
     #     2. Hold – computes the unbiased values for muL and t (dataset is
-    #.       never shown to the IRL learning algo.)
-    X_demo, X_hold, y_demo, y_hold = train_test_split(X, y, test_size=.2)
+    #        never shown to the IRL learning algo.)
+    #
+    # But furst check that split doesn't have to big of a difference between demos and
+    # holdout, otherwise it messes up interpretations.
+    #
+    split_is_okay = False
+    max_muE_cosine_dist_split = .001
 
-    # Generate expert demonstrations to learn from
-    muE, demosE = generate_demos_k_folds(
-        X=X_demo,
-        y=y_demo,
-        clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
-        obj_set=feat_obj_set,
-        n_demos=exp_info['N_EXPERT_DEMOS'],
-    )
+    while not split_is_okay:
+        X_demo, X_hold, y_demo, y_hold = train_test_split(X, y, test_size=.2)
+
+        # Generate expert demonstrations to learn from
+        muE, demosE = generate_demos_k_folds(
+            X=X_demo,
+            y=y_demo,
+            clf=expert_algo_lookup[exp_info['EXPERT_ALGO']],
+            obj_set=feat_obj_set,
+            n_demos=exp_info['N_EXPERT_DEMOS'],
+        )
+
+        # Fit expert on entire training dataset. This is used when computing demos
+        # on the holdout set for performance measurement.
+        expert_hold_clf = expert_algo_lookup[exp_info['EXPERT_ALGO']]
+        expert_hold_clf.fit(X_demo, y_demo)
+        demoE_hold = generate_demo(
+            clf=expert_hold_clf, X_test=X_demo,
+            y_test=y_demo,
+            can_observe_y=CAN_OBSERVE_Y,
+        )
+        muE_hold = np.array([feat_obj_set.compute_demo_feature_exp(demoE_hold)])
+        muE_perf_hold = np.array([perf_obj_set.compute_demo_feature_exp(demoE_hold)])
+
+        for demo_i, _ in enumerate(muE):
+            split_is_okay = True
+            if cosine(muE[demo_i], muE_hold[demo_i]) > max_muE_cosine_dist_split:
+                split_is_okay = False
+
     logging.info(f"muE:\n{muE}")
-
-    # Fit expert on entire training dataset. This is used when computing demos
-    # on the holdout set for performance measurement.
-    expert_hold_clf = expert_algo_lookup[exp_info['EXPERT_ALGO']]
-    expert_hold_clf.fit(X_demo, y_demo)
-    demoE_hold = generate_demo(
-        clf=expert_hold_clf, X_test=X_demo,
-        y_test=y_demo,
-        can_observe_y=CAN_OBSERVE_Y,
-    )
-    muE_hold = np.array([feat_obj_set.compute_demo_feature_exp(demoE_hold)])
     logging.info(f"muE_hold:\n{muE_hold}")
-    muE_perf_hold = np.array([perf_obj_set.compute_demo_feature_exp(demoE_hold)])
     logging.info(f"muE_perf_hold:\n{muE_perf_hold}")
 
     ##
@@ -796,7 +812,7 @@ def run_trial_source_domain(
         try:
             allow_pos_weights = not exp_info['ALLOW_NEG_WEIGHTS']
             randomly_simluate_stuck = np.random.rand()
-            if randomly_simluate_stuck < .33 or is_stuck_in_loop:
+            if randomly_simluate_stuck < 0 or is_stuck_in_loop:
                 is_stuck_in_loop = False
                 # Randomly sample 1 or 2 negative samples (learned policies)
                 n_samples = max(1, np.random.choice(int(np.log((i+1)**2))+1))
@@ -821,7 +837,7 @@ def run_trial_source_domain(
 
         wi = svm.weights()
 
-        # New as of 01/07/2023
+        # New as of 01/07/2024
         # If weights have any negative values, renormalize the set to be
         # positive but still same rank order. I think this will help when IRL
         # can't land on a 1, 0, 0 weight b/c the negative weights prevent the
@@ -974,29 +990,30 @@ def run_trial_source_domain(
         logging.info(f"IGNORING RESULTS BECAUSE BEST ERROR {min(t):.3f} > {exp_info['IGNORE_RESULTS_EPSILON']:.3f}")
         return False, None, None, None, None, None, None, None
 
+
+    # Find best weights based on smallest error (with nonnegative weights)
+    t_arg_smallest_to_largest = np.argsort(t)
+    best_iter = t_arg_smallest_to_largest[0]
+    if not exp_info['ALLOW_NEG_WEIGHTS']:
+        best_t = None
+        best_t_i = 0
+        best_t_done = False
+        while not best_t_done:
+            if best_t_i >= len(t):
+                np.info(f"best_weight:\t {np.round(weights[best_iter], 3)}")
+                display(weights)
+                raise ValueError('Only negative weights learned')
+            best_iter = t_arg_smallest_to_largest[best_t_i]
+            best_t = t[best_iter]
+            if np.all(weights[best_iter] > -1e-5) and best_t <= exp_info['IGNORE_RESULTS_EPSILON']:
+                best_t_done = True
+            best_t_i += 1
+
     ##
     # Book keeping stuff for the trial.
     ##
 
     # Compare the best learned policy with the expert demonstrations
-
-    # Find best weights based on smallest error (with nonnegative weights)
-    best_iter = None
-    best_t = None
-    best_t_i = 0
-    best_t_done = False
-    while not best_t_done:
-        if best_t_i >= len(t):
-            np.info(f"best_weight:\t {np.round(weights[best_iter], 3)}")
-            display(weights)
-            raise ValueError('Only negative weights learned')
-        t_arg_smallest_to_largest = np.argsort(t)
-        best_iter = t_arg_smallest_to_largest[best_t_i]
-        best_t = t[best_iter]
-        if np.all(weights[best_iter] > -1e-5) or exp_info['ALLOW_NEG_WEIGHTS']:
-            best_t_done = True
-        best_t_i += 1
-
     best_demo = demo_history[best_iter]
     best_weight = weights[best_iter]
     logging.debug('Best iteration: ' + str(best_iter))
@@ -2140,8 +2157,8 @@ def plot_results_source_domain_only(
                 linewidth=.2,
                 whis=mu_whis,
                 dodge=True,
-                width=.65,
-                gap=.2,
+                width=.75,
+                gap=.1,
             )
         elif plot_type == 'boxenplot':
             sns.boxenplot(
@@ -2160,8 +2177,8 @@ def plot_results_source_domain_only(
                 # dodge=True,
                 width_method='linear',
                 k_depth=4,
-                width=.65,
-                gap=.2,
+                width=.75,
+                gap=.1,
                 showfliers=False,
             )
         else:
@@ -2208,10 +2225,10 @@ def plot_results_source_domain_only(
                 saturation=1,
                 palette=w_palette,
                 linewidth=.2,
-                whis=mu_whis,
+                whis=w_whis,
                 dodge=True,
-                width=.65,
-                gap=.2,
+                width=.5,
+                gap=.1,
             )
         elif plot_type == 'boxenplot':
             sns.boxenplot(
@@ -2226,8 +2243,8 @@ def plot_results_source_domain_only(
                 line_kws=dict(linewidth=.8),  # used for median
                 width_method='linear',
                 k_depth=4,
-                width=.65,
-                gap=.2,
+                width=.5,
+                gap=.1,
                 showfliers=False,
             )
         else:
@@ -2269,10 +2286,10 @@ def plot_results_source_domain_only(
                 saturation=1,
                 palette=palette,
                 linewidth=.2,
-                whis=mu_whis,
+                whis=perf_whis,
                 dodge=True,
-                width=.65,
-                gap=.2,
+                width=.75,
+                gap=.1,
             )
         elif plot_type == 'boxenplot':
             sns.boxenplot(
@@ -2288,8 +2305,8 @@ def plot_results_source_domain_only(
                 line_kws=dict(linewidth=.8),  # used for median
                 width_method='linear',
                 k_depth=4,
-                width=.65,
-                gap=.2,
+                width=.75,
+                gap=.1,
                 showfliers=False,
             )
         else:
@@ -2301,9 +2318,9 @@ def plot_results_source_domain_only(
         if exp_i == perf_leg_ax:
             ax3.legend(
                 title=None,
-                ncol=3,
+                ncol=1,
                 loc='best',
-                labelspacing=0,
+                labelspacing=.3,
                 columnspacing=1.5,
                 # bbox_to_anchor=(-2.08, -.48),
             )
@@ -2331,7 +2348,7 @@ def plot_results_source_domain_only(
         ax3.set_title(title)
 
     plt.tight_layout()
-    plt.subplots_adjust(wspace=.03, hspace=1.2)
+    plt.subplots_adjust(wspace=.03, hspace=.9)
 
     print(f"DATASET: {dataset}")
 
@@ -2382,6 +2399,7 @@ def plot_results_target_domain(
     mu_cp=cp,
     figsize=(12, 4),
     palette=cp,
+    perf_leg_ax=0,
 ):
     path_prefix = './../../data/experiment_output/fair_irl/'
     exp_results_files = sorted(os.listdir(f"{path_prefix}/exp_results/"))
@@ -2595,24 +2613,19 @@ def plot_results_target_domain(
         perf_df = perf_df.query('Value != 0')
 
         # Feature Expecations
-        sns.boxenplot(
+        sns.boxplot(
             x=mu_df['Feature Expectation'],
             y=mu_df['Value'],
             hue=mu_df['Demo Producer'],
             hue_order=mu_hue_order,
             ax=ax1,
-            # fliersize=0,  # Remove outliers
+            fliersize=0,  # Remove outliers
             saturation=1,
             linewidth=.2,
-            line_kws=dict(linewidth=.8),  # used for median
-            # whis=mu_whis,
-            # size=2,
-            # dodge=True,
-            width_method='linear',
-            k_depth=4,
-            width=.65,
-            gap=.2,
-            showfliers=False,
+            whis=mu_whis,
+            dodge=True,
+            width=.85,
+            gap=.1,
             palette=palette,
         )
         ax1.set_xlabel(None)
@@ -2624,7 +2637,6 @@ def plot_results_target_domain(
                 loc='lower left',
                 labelspacing=0,
                 columnspacing=1.5,
-                bbox_to_anchor=(-2.2, -.48),
             )
 
         ax1.set_ylabel(None)
@@ -2640,37 +2652,32 @@ def plot_results_target_domain(
         ax1.set_title(f"Expert: {expert_algo}")
 
         # Performance measures
-        sns.boxenplot(
+        sns.boxplot(
             x=perf_df['Performance Measures'],
             y=perf_df['Value'],
             hue=perf_df['Demo Producer'],
             order=perf_objective_set_names,
             hue_order=perf_hue_order,
             ax=ax2,
-            # fliersize=0,  # Remove outliers
+            fliersize=0,  # Remove outliers
             saturation=1,
             palette=palette,
             linewidth=.2,
-            line_kws=dict(linewidth=.8),  # used for median
-            # whis=perf_whis,
-            # size=2,
-            # dodge=True,
-            width_method='linear',
-            k_depth=4,
-            width=.65,
-            gap=.2,
-            showfliers=False,
+            whis=perf_whis,
+            dodge=True,
+            width=.7,
+            gap=.1,
         )
         ax2.set_xlabel(None)
         ax2.get_legend().remove()
-        if exp_i == len(expert_algos)-1:
+        if exp_i == perf_leg_ax:
             ax2.legend(
                 title=None,
                 ncol=4,
                 loc='lower left',
                 labelspacing=0,
                 columnspacing=1.5,
-                bbox_to_anchor=(-2.80, -.45),
+                bbox_to_anchor=(-1.35, 0),
             )
 
         ax2.set_ylabel(None)
@@ -2686,7 +2693,7 @@ def plot_results_target_domain(
         ax2.set_title(f"Expert: {expert_algo}")
 
     plt.tight_layout()
-    plt.subplots_adjust(wspace=.03, hspace=1.1)
+    plt.subplots_adjust(wspace=.03, hspace=.7)
 
     print(f"SOURCE DATASET: {source_dataset}")
     print(f"TARGET DATASET: {target_dataset}")

@@ -1144,14 +1144,14 @@ class PredictiveParityObjective(Objective):
         return mu
 
 
-class OppositePredictiveParityObjective(Objective):
+class NegativePredictiveParityObjective(Objective):
     """
     Not intended for optimization, just feature expectations. Can't optimize
     this with LP, since it's not a linear measure.
     """
 
     def __init__(self):
-        self.name = 'OppPredPar'
+        self.name = 'NegPredPar'
         super().__init__()
 
     def compute_feat_exp(self, demo):

@@ -290,9 +290,9 @@ def irl_error(
         mu_deltas[mu_deltas < 0] = 1 * mu_deltas[mu_deltas < 0]
 
     if dot_weights_feat_exp:
-        err = np.linalg.norm(np.abs(w) * mu_deltas, ord=1)
+        err = np.linalg.norm(w * mu_deltas, ord=1)
     else:
-        err = np.linalg.norm(np.abs(mu_deltas)) * np.linalg.norm(w, ord=1)
+        err = np.linalg.norm(mu_deltas) * np.linalg.norm(w, ord=1)
 
     best_err = err
 
