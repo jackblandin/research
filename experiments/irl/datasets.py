@@ -105,7 +105,7 @@ def generate_adult_dataset(
     # doing IRL.
     #
     # Balance the positive and negative classes
-    rus = RandomUnderSampler(sampling_strategy=.5)
+    rus = RandomUnderSampler(sampling_strategy=.42)
     X, y = rus.fit_resample(X, y)
     feature_types = {
         'boolean': [
@@ -319,7 +319,7 @@ def generate_boston_housing_dataset(n=10_000):
     X = df.drop(columns='MEDV')
 
     # Balance the positive and negative classes
-    rus = RandomUnderSampler(sampling_strategy=.5)
+    rus = RandomUnderSampler(sampling_strategy=1)
     X, y = rus.fit_resample(X, y)
     feature_types = {
         'boolean': [
@@ -422,7 +422,7 @@ def generate_acs_income(n=10_000, state=None):
     quantile_features = []
     for cont_feat in [
             'AGEP',
-            'SCHL',
+            # 'SCHL',
             # 'WKHP',
     ]:
         for q in [
@@ -445,7 +445,8 @@ def generate_acs_income(n=10_000, state=None):
             'COW',
             'MAR',
             # 'OCCP',
-            # 'POBP',
+            'POBP',
+            'RAC1P',
         ],
         'continuous': [
         ],
@@ -460,7 +461,7 @@ def generate_acs_income(n=10_000, state=None):
 
     # Split into inputs and target variables
     y = df['y']
-    X = df.copy().drop(columns=['y', z_col])
+    X = df.copy().drop(columns=['y'])
     del df
 
     # NOTE: 05/20/2023

@@ -172,8 +172,9 @@ def generate_expert_algo_lookup(feature_types):
     opt_acc_pipe = sklearn_clf_pipeline(
         feature_types,
         # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-        RandomForestClassifier(),
-        # XGBClassifier(),
+        # clf_inst=DecisionTreeClassifier(min_samples_leaf=5, max_depth=10),
+        # RandomForestClassifier(),
+        XGBClassifier(),
     )
 
     # HardtDemPar
@@ -201,8 +202,8 @@ def generate_expert_algo_lookup(feature_types):
         estimator=sklearn_clf_pipeline(
             feature_types=feature_types,
             # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-            clf_inst=RandomForestClassifier(),
-            # clf_inst=XGBClassifier(),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
         )
     )
     eq_opp_wrapper = FairLearnSkLearnWrapper(
@@ -217,8 +218,8 @@ def generate_expert_algo_lookup(feature_types):
         prefit=False,
         estimator=sklearn_clf_pipeline(
             feature_types=feature_types,
-            clf_inst=RandomForestClassifier(),
-            # clf_inst=XGBClassifier(),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
         )
     )
     eq_odds_thresh_wrapper = FairLearnSkLearnWrapper(
@@ -234,8 +235,8 @@ def generate_expert_algo_lookup(feature_types):
         estimator=sklearn_clf_pipeline(
             feature_types=feature_types,
             # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-            clf_inst=RandomForestClassifier(),
-            # clf_inst=XGBClassifier(),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
         )
     )
     eq_odds_red_wrapper = FairLearnSkLearnWrapper(
@@ -252,9 +253,9 @@ def generate_expert_algo_lookup(feature_types):
         constraints=bgl,
         estimator=sklearn_clf_pipeline(
             feature_types=feature_types,
-            # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-            clf_inst=RandomForestClassifier(),
-            # clf_inst=XGBClassifier(),
+            # clf_inst=DecisionTreeClassifier(min_samples_leaf=5, max_depth=10),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
         )
     )
     bgl_wrapper = FairLearnSkLearnWrapper(
@@ -272,8 +273,8 @@ def generate_expert_algo_lookup(feature_types):
         estimator=sklearn_clf_pipeline(
             feature_types=feature_types,
             # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-            clf_inst=RandomForestClassifier(),
-            # clf_inst=XGBClassifier(),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
         )
     )
     fpr_wrapper = FairLearnSkLearnWrapper(
@@ -289,8 +290,8 @@ def generate_expert_algo_lookup(feature_types):
         estimator=sklearn_clf_pipeline(
             feature_types=feature_types,
             # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
-            clf_inst=RandomForestClassifier(),
-            # clf_inst=XGBClassifier(),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
         )
     )
     tnr_wrapper = FairLearnSkLearnWrapper(
@@ -317,9 +318,9 @@ def generate_expert_algo_lookup(feature_types):
         'BoundedGroupLoss': bgl_wrapper,
         'COMPAS': compas_score_high,
         # Initial policies
-        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.15, .15]),
-        'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=[.05, .05]),
-        'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=[.05, .05]),
+        'OptAccNoisy': UnfairNoisyClassifier(clf=opt_acc_pipe, prob=[.15, .25]),
+        'HardtDemParNoisy': UnfairNoisyClassifier(clf=dem_par_wrapper, prob=[.05, .25]),
+        'HardtEqOppNoisy': UnfairNoisyClassifier(clf=eq_opp_wrapper, prob=[.05, .25]),
         'HardtFPRNoisy': UnfairNoisyClassifier(clf=fpr_wrapper, prob=[.05, .05]),
         'HardtTNRNoisy': UnfairNoisyClassifier(clf=tnr_wrapper, prob=[.05, .05]),
         'DummyNoisy': UnfairNoisyClassifier(clf=dummy_pipe, prob=[.05, .05]),
@@ -1152,7 +1153,11 @@ def run_trial_source_domain(
                 alpha=1,
                 c=cp[1],
             )
-            axes[i].legend(ncol=1, labelspacing=.7, loc='upper left')
+            axes[i].legend(
+                ncol=1,
+                labelspacing=.7,
+                loc='upper left',
+            )
 
         plt.suptitle(f"Best learned weights: {best_weight.round(2)}")
         plt.tight_layout()
@@ -2155,9 +2160,11 @@ def plot_results_source_domain_only(
                 saturation=1,
                 palette=list(cp[0:3])+ list(cp[6:]),
                 linewidth=.2,
+                medianprops=dict(color="black", alpha=1, linewidth=.8),
+                boxprops=dict(alpha=1),
                 whis=mu_whis,
                 dodge=True,
-                width=.75,
+                width=.83,
                 gap=.1,
             )
         elif plot_type == 'boxenplot':
@@ -2192,8 +2199,8 @@ def plot_results_source_domain_only(
                 title=None,
                 ncol=1,
                 loc='best',
-                labelspacing=0,
-                columnspacing=1,
+                labelspacing=.1,
+                columnspacing=.1,
                 # bbox_to_anchor=(-1.7, 0),
             )
         else:
@@ -2209,9 +2216,9 @@ def plot_results_source_domain_only(
             ax1.set_yticklabels([])
 
 
-        mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
-        perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
-        w_df = w_df.sort_values(['Weight', 'IRL Method'])
+        # mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
+        # perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
+        # w_df = w_df.sort_values(['Weight', 'IRL Method'])
 
         # Plot boxplot for weights
         if plot_type == 'boxplot':
@@ -2225,6 +2232,8 @@ def plot_results_source_domain_only(
                 saturation=1,
                 palette=w_palette,
                 linewidth=.2,
+                medianprops=dict(color="black", alpha=1, linewidth=.8),
+                boxprops=dict(alpha=1),
                 whis=w_whis,
                 dodge=True,
                 width=.5,
@@ -2286,6 +2295,8 @@ def plot_results_source_domain_only(
                 saturation=1,
                 palette=palette,
                 linewidth=.2,
+                medianprops=dict(color="black", alpha=1, linewidth=.8),
+                boxprops=dict(alpha=1),
                 whis=perf_whis,
                 dodge=True,
                 width=.75,
@@ -2318,10 +2329,10 @@ def plot_results_source_domain_only(
         if exp_i == perf_leg_ax:
             ax3.legend(
                 title=None,
-                ncol=1,
+                ncol=3,
                 loc='best',
                 labelspacing=.3,
-                columnspacing=1.5,
+                columnspacing=.5,
                 # bbox_to_anchor=(-2.08, -.48),
             )
         else:
@@ -2604,9 +2615,9 @@ def plot_results_target_domain(
         if min_perf_value is not None:
             perf_df = perf_df.query('Value >= @min_perf_value')
 
-        mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
-        perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
-        w_df = w_df.sort_values(['Weight', 'IRL Method'])
+        # mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
+        # perf_df = perf_df.sort_values(['Demo Producer', 'Performance Measures'])
+        # w_df = w_df.sort_values(['Weight', 'IRL Method'])
 
         # Filter out empty arrays that were added when target can't be computed
         mu_df = mu_df.query('Value != 0')
@@ -2622,6 +2633,8 @@ def plot_results_target_domain(
             fliersize=0,  # Remove outliers
             saturation=1,
             linewidth=.2,
+            medianprops=dict(color="black", alpha=1, linewidth=.8),
+            boxprops=dict(alpha=1),
             whis=mu_whis,
             dodge=True,
             width=.85,
@@ -2663,6 +2676,8 @@ def plot_results_target_domain(
             saturation=1,
             palette=palette,
             linewidth=.2,
+            medianprops=dict(color="black", alpha=1, linewidth=.8),
+            boxprops=dict(alpha=1),
             whis=perf_whis,
             dodge=True,
             width=.7,
@@ -2673,11 +2688,11 @@ def plot_results_target_domain(
         if exp_i == perf_leg_ax:
             ax2.legend(
                 title=None,
-                ncol=4,
-                loc='lower left',
-                labelspacing=0,
+                ncol=3,
+                loc='best',
+                labelspacing=.2,
                 columnspacing=1.5,
-                bbox_to_anchor=(-1.35, 0),
+                # bbox_to_anchor=(-1.2, 0),
             )
 
         ax2.set_ylabel(None)
@@ -2887,9 +2902,9 @@ def plot_source_fair_irl_comparisons(
         _w_df = w_dfs[w_dfs['IRL Method'] == demo_producer.replace('mu', 'w')]
 
         # Sort
-        _mu_df = _mu_df.sort_values(['expert_algo', 'Feature Expectation'])
-        _perf_df = _perf_df.sort_values(['expert_algo', 'Performance Measures'])
-        _w_df = _w_df.sort_values(['Weight', 'IRL Method'])
+        # _mu_df = _mu_df.sort_values(['expert_algo', 'Feature Expectation'])
+        # _perf_df = _perf_df.sort_values(['expert_algo', 'Performance Measures'])
+        # _w_df = _w_df.sort_values(['Weight', 'IRL Method'])
 
         # Clean up label names for plots
         _mu_df['Demo Producer'] = (
@@ -2919,7 +2934,9 @@ def plot_source_fair_irl_comparisons(
             fliersize=0,  # Remove outliers
             saturation=1,
             palette=palette,
-            linewidth=.5,
+            linewidth=.2,
+            medianprops=dict(color="black", alpha=1, linewidth=.8),
+            boxprops=dict(alpha=1),
             whis=mu_whis,
             gap=.2,
             width=.6,
@@ -2943,7 +2960,9 @@ def plot_source_fair_irl_comparisons(
             fliersize=0,  # Remove outliers
             saturation=1,
             palette=palette,
-            linewidth=.5,
+            linewidth=.2,
+            medianprops=dict(color="black", alpha=1, linewidth=.8),
+            boxprops=dict(alpha=1),
             whis=w_whis,
             gap=.2,
             width=.6,
@@ -3217,9 +3236,9 @@ def plot_target_fair_irl_comparisons(
         _w_df = w_dfs[w_dfs['IRL Method'] == w_demo_producer]
 
         # Sort
-        _mu_df = _mu_df.sort_values(['expert_algo', 'Feature Expectation'])
-        _perf_df = _perf_df.sort_values(['expert_algo', 'Performance Measures'])
-        _w_df = _w_df.sort_values(['Weight', 'IRL Method'])
+        # _mu_df = _mu_df.sort_values(['expert_algo', 'Feature Expectation'])
+        # _perf_df = _perf_df.sort_values(['expert_algo', 'Performance Measures'])
+        # _w_df = _w_df.sort_values(['Weight', 'IRL Method'])
 
         # Clean up label names for plots
         _mu_df['Demo Producer'] = (
