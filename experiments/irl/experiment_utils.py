@@ -220,6 +220,7 @@ def generate_expert_algo_lookup(feature_types):
             feature_types=feature_types,
             # clf_inst=RandomForestClassifier(),
             clf_inst=XGBClassifier(),
+            # clf_inst=DecisionTreeClassifier(min_samples_leaf=10000, max_depth=20),
         )
     )
     eq_odds_thresh_wrapper = FairLearnSkLearnWrapper(
@@ -298,6 +299,24 @@ def generate_expert_algo_lookup(feature_types):
         clf=tnr_thresh_opt,
         sensitive_features='z',
     )
+
+    # False Positive Rate Noisy
+    fnr_thresh_opt = ThresholdOptimizer(
+        constraints='false_negative_rate_parity',
+        predict_method="predict",
+        prefit=False,
+        estimator=sklearn_clf_pipeline(
+            feature_types=feature_types,
+            # clf_inst=DecisionTreeClassifier(min_samples_leaf=10, max_depth=4),
+            # clf_inst=RandomForestClassifier(),
+            clf_inst=XGBClassifier(),
+        )
+    )
+    fnr_wrapper = FairLearnSkLearnWrapper(
+        clf=fnr_thresh_opt,
+        sensitive_features='z',
+    )
+
     dummy_pipe = DummyClassifier(strategy='uniform')
 
     compas_score_high = ManualClassifier(
@@ -313,6 +332,7 @@ def generate_expert_algo_lookup(feature_types):
         'HardtEqOdds': eq_odds_thresh_wrapper,
         'HardtFPRPar': fpr_wrapper,
         'HardtTNRPar': tnr_wrapper,
+        'HardtFNRPar': fnr_wrapper,
         'Dummy': dummy_pipe,
         'RedEqOdds': eq_odds_red_wrapper,
         'BoundedGroupLoss': bgl_wrapper,
@@ -2008,7 +2028,7 @@ def plot_results_source_domain_only(
         3,
         n_exp,
         figsize=figsize,
-        height_ratios=[1.5,1,1.5],
+        height_ratios=[1,2.5,1.5],
     )
 
     mu_dfs = []
@@ -2155,7 +2175,7 @@ def plot_results_source_domain_only(
                 y=mu_df['Value'],
                 hue=mu_df['Demo Producer'],
                 hue_order=mu_hue_order,
-                ax=ax1,
+                ax=ax2,
                 fliersize=0,  # Remove outliers
                 saturation=1,
                 palette=list(cp[0:3])+ list(cp[6:]),
@@ -2164,7 +2184,7 @@ def plot_results_source_domain_only(
                 boxprops=dict(alpha=1),
                 whis=mu_whis,
                 dodge=True,
-                width=.83,
+                width=.75,
                 gap=.1,
             )
         elif plot_type == 'boxenplot':
@@ -2173,7 +2193,7 @@ def plot_results_source_domain_only(
                 y=mu_df['Value'],
                 hue=mu_df['Demo Producer'],
                 hue_order=mu_hue_order,
-                ax=ax1,
+                ax=ax2,
                 # fliersize=0,  # Remove outliers
                 saturation=1,
                 palette=list(cp[0:3])+ list(cp[6:]),
@@ -2191,11 +2211,11 @@ def plot_results_source_domain_only(
         else:
             raise ValueError(f"Invalid plot type: {plot_type}")
 
-        ax1.set_ylabel(None)
-        ax1.set_xlabel(None)
+        ax2.set_ylabel(None)
+        ax2.set_xlabel('Feature Expectations')
 
         if exp_i == mu_leg_ax:
-            ax1.legend(
+            ax2.legend(
                 title=None,
                 ncol=1,
                 loc='best',
@@ -2204,16 +2224,16 @@ def plot_results_source_domain_only(
                 # bbox_to_anchor=(-1.7, 0),
             )
         else:
-            ax1.get_legend().remove()
+            ax2.get_legend().remove()
 
-        ax1.yaxis.set_major_formatter(FormatStrFormatter('%g'))
-        ax1.set_yticks(mu_yticks)
-        ax1.set_ylim(mu_ylim)
+        ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax2.set_yticks(mu_yticks)
+        ax2.set_ylim(mu_ylim)
 
         if exp_i == 0:
-            ax1.set_yticklabels(mu_yticks)
+            ax2.set_yticklabels(mu_yticks)
         else:
-            ax1.set_yticklabels([])
+            ax2.set_yticklabels([])
 
 
         # mu_df = mu_df.sort_values(['Demo Producer', 'Feature Expectation'])
@@ -2227,7 +2247,7 @@ def plot_results_source_domain_only(
                 y=w_df['Value'],
                 hue=w_df['IRL Method'],
                 hue_order=w_hue_order,
-                ax=ax2,
+                ax=ax1,
                 fliersize=0,  # Remove outliers
                 saturation=1,
                 palette=w_palette,
@@ -2245,7 +2265,7 @@ def plot_results_source_domain_only(
                 y=w_df['Value'],
                 hue=w_df['IRL Method'],
                 hue_order=w_hue_order,
-                ax=ax2,
+                ax=ax1,
                 saturation=1,
                 palette=w_palette,
                 linewidth=.2,
@@ -2259,11 +2279,11 @@ def plot_results_source_domain_only(
         else:
             raise ValueError(f"Invalid plot type: {plot_type}")
 
-        ax2.set_ylabel(None)
-        ax2.set_xlabel(None)
+        ax1.set_ylabel(None)
+        ax1.set_xlabel('Weights')
 
         if exp_i == w_leg_ax:
-            ax2.legend(
+            ax1.legend(
                 title=None,
                 ncol=2,
                 loc='best',
@@ -2271,16 +2291,16 @@ def plot_results_source_domain_only(
                 columnspacing=.5,
             )
         else:
-            ax2.get_legend().remove()
+            ax1.get_legend().remove()
 
-        ax2.yaxis.set_major_formatter(FormatStrFormatter('%g'))
-        ax2.set_yticks(w_yticks)
-        ax2.set_ylim(w_ylim)
+        ax1.yaxis.set_major_formatter(FormatStrFormatter('%g'))
+        ax1.set_yticks(w_yticks)
+        ax1.set_ylim(w_ylim)
 
         if exp_i == 0:
-            ax2.set_yticklabels(w_yticks)
+            ax1.set_yticklabels(w_yticks)
         else:
-            ax2.set_yticklabels([])
+            ax1.set_yticklabels([])
 
         # Plot boxplot for performance measures
         if plot_type == 'boxplot':
@@ -2324,12 +2344,12 @@ def plot_results_source_domain_only(
             raise ValueError(f"Invalid plot type: {plot_type}")
 
         ax3.set_ylabel(None)
-        ax3.set_xlabel(None)
+        ax3.set_xlabel('Fairness Measures')
 
         if exp_i == perf_leg_ax:
             ax3.legend(
                 title=None,
-                ncol=3,
+                ncol=1,
                 loc='best',
                 labelspacing=.3,
                 columnspacing=.5,
@@ -2354,12 +2374,12 @@ def plot_results_source_domain_only(
         if extra_title is not None:
             title += f"\n{extra_title}"
         # title += f"\n{28*'-'}"
-        ax1.set_title(title)
-        ax2.set_title(title)
-        ax3.set_title(title)
+        ax2.set_title(title, fontsize=22)
+        ax1.set_title(title, fontsize=12)
+        ax3.set_title(title, fontsize=12)
 
     plt.tight_layout()
-    plt.subplots_adjust(wspace=.03, hspace=.9)
+    plt.subplots_adjust(wspace=.03, hspace=1)
 
     print(f"DATASET: {dataset}")
 
@@ -2479,6 +2499,9 @@ def plot_results_target_domain(
                 or extra_skip_conditions(info)
             ):
                 continue
+
+            print(result_file, info['EXPERT_ALGO'], info['IRL_METHOD'], f"{len(result)} result rows")
+
 
             for idx, row in result.iterrows():
                 # Append muE and muL results
@@ -2688,7 +2711,7 @@ def plot_results_target_domain(
         if exp_i == perf_leg_ax:
             ax2.legend(
                 title=None,
-                ncol=3,
+                ncol=2,
                 loc='best',
                 labelspacing=.2,
                 columnspacing=1.5,
