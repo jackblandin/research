@@ -211,7 +211,7 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
 
 
 def irl_error(
-        w, muE, muL, dot_weights_feat_exp=True, allow_neg_weights=False,
+        w, muE, muL, dot_weights_feat_exp=True, allow_neg_weights=False, svm_margin=None,
 ):
     """
     Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
@@ -233,6 +233,8 @@ def irl_error(
     allow_neg_weights : bool, default False
         If True, allows positive feature expectation errors to be nulled out
         even if weights are negative.
+    svm_margin : float, optional
+        If provided, use this for error.
 
     Returns
     -------
@@ -281,18 +283,26 @@ def irl_error(
     best_j = len(muL) - 1
 
 
-    mu_deltas = (muE.mean(axis=0) - muL[-1]) / muE.mean(axis=0)
-
-    # JDB 01/07/2024
     # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
     # adding the muE.mean(axis=0) as a denominator
-    if allow_neg_weights or  np.all(w > -1e-5):
-        mu_deltas[mu_deltas < 0] = 1 * mu_deltas[mu_deltas < 0]
+    mu_deltas = (muE.mean(axis=0) - muL[-1]) / muE.mean(axis=0)
 
-    if dot_weights_feat_exp:
-        err = np.linalg.norm(w * mu_deltas, ord=2)
+    # JDB 01/20/2024
+    # Trying this out: use SVM hyperplane margin as error
+    if svm_margin is not None:
+        err = svm_margin
     else:
-        err = np.linalg.norm(mu_deltas) * np.linalg.norm(w, ord=2)
+
+        # JDB 01/07/2024
+        # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
+        # adding the muE.mean(axis=0) as a denominator
+        if allow_neg_weights or  np.all(w > -1e-5):
+            mu_deltas[mu_deltas < 0] = 1 * mu_deltas[mu_deltas < 0]
+
+        if dot_weights_feat_exp:
+            err = np.linalg.norm(w * mu_deltas, ord=2)
+        else:
+            err = np.linalg.norm(mu_deltas) * np.linalg.norm(w, ord=2)
 
     best_err = err
 
@@ -301,5 +311,8 @@ def irl_error(
     if np.allclose(w[0], 0, atol=1e-5):
         logging.info('\t\tAccuracy weight is zero, infinite error')
         best_err = np.inf
+
+
+    l2_mu_deltas = np.linalg.norm(mu_deltas, ord=2)
 
     return best_err, best_j, mu_deltas, l2_mu_deltas

@@ -96,6 +96,23 @@ def generate_adult_dataset(
       )
     )
 
+    quantile_features = []
+    for cont_feat in [
+        'age',
+        # 'educational-num',
+        'capital-gain',
+        'capital-loss',
+        # 'hours-per-week',
+    ]:
+        for q in [
+                .1,
+                .75,
+                .9,
+        ]:
+            f = f"{cont_feat}__{q}"
+            df[f] = (df[cont_feat] <= df[cont_feat].quantile(q))
+            quantile_features.append(f)
+
     # Split into inputs and target variables
     y = df['y']
     X = df.copy().drop(columns=['y', y_col, z_col, 'income'])
@@ -107,12 +124,14 @@ def generate_adult_dataset(
     # Balance the positive and negative classes
     rus = RandomUnderSampler(sampling_strategy=.42)
     X, y = rus.fit_resample(X, y)
+
+
     feature_types = {
         'boolean': [
             'z',
-        ],
+        ] + quantile_features,
         'categoric': [
-            # 'workclass',
+            'workclass',
             'education',
             'marital-status',
             # 'occupation',

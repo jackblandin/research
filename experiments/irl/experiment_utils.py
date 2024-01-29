@@ -475,6 +475,10 @@ def generate_single_exp_results_df(feat_obj_set, perf_obj_set, results):
         exp_df_cols.append(f"muL_perf_best_hold_{obj.name}")
         exp_df_cols.append(f"muL_perf_target_best_hold_{obj.name}")
 
+    exp_df_cols.append(f"source_trial_runtime")
+    exp_df_cols.append(f"source_irl_loop_runtime")
+    exp_df_cols.append(f"source_trial_inputsize")
+
     exp_df = pd.DataFrame(results, columns=exp_df_cols)
 
     return exp_df
@@ -482,6 +486,7 @@ def generate_single_exp_results_df(feat_obj_set, perf_obj_set, results):
 
 def new_trial_result(
     feat_obj_set, perf_obj_set, muE, muE_hold, muE_perf_hold, df_irl,
+    source_trial_runtime, source_irl_loop_runtime, source_trial_inputsize,
     muE_target=None, muE_perf_target=None, muL_target_hold=None,
     muL_perf_target_hold=None,
 ):
@@ -508,6 +513,12 @@ def new_trial_result(
         (and therefore a positive SVM training example) or a learned policy
         (and therefore a negative SVM training example). Includes relevant
         items like learned weights, feature expectations, error, etc.
+    source_trial_runtime : float
+        The runtime to complete the source trial, in seconds.
+    source_irl_loop_runtime : float
+        The runtime to complete the source IRL loop, in seconds.
+    source_trial_inputsize : int
+        The size of the input space. Specifically `mdp.n_states_` (includes y)
     muE_target : array-like<float>. Shape(n_expert_demos, n_objectives).
         The feature expectations of running the expert algo on the target
         domain demo set.
@@ -616,6 +627,10 @@ def new_trial_result(
         else:
             result.append(np.nan)
 
+    result.append(source_trial_runtime)
+    result.append(source_irl_loop_runtime)
+    result.append(source_trial_inputsize)
+
     return result
 
 
@@ -663,6 +678,8 @@ def run_trial_source_domain(
         The irl error on the holdout set.
     clf_pol : research.rl.env.clf_mdp.ClassificationMDPPolicy
         The classification MDP optimal policy.
+    irl_loop_runtime : float
+        The runtime of the IRL loop, in seconds.
 
     """
     # Initiate objectives
@@ -775,26 +792,7 @@ def run_trial_source_domain(
     feat_obj_set_cols = [obj.name for obj in feat_obj_set.objectives]
     perf_obj_set_cols = [obj.name for obj in perf_obj_set.objectives]
 
-    # Generate initial learned policies to serve as negative training examples
-    # for the SVM IRL classifier.
-    mu = []
-    for non_expert_algo in exp_info['NON_EXPERT_ALGOS']:
-        _mu, _demos = generate_demos_k_folds(
-            X=X_demo,
-            y=y_demo,
-            clf=expert_algo_lookup[non_expert_algo],
-            obj_set=feat_obj_set,
-            n_demos=1,
-        )
-        mu.append(_mu[0])
-
-    mu = np.array(mu)
-    logging.info(f"muL:\n{mu}")
-    X_irl_exp = pd.DataFrame(muE, columns=feat_obj_set_cols)
-    y_irl_exp = pd.Series(np.ones(exp_info['N_EXPERT_DEMOS']), dtype=int)
-    X_irl_learn = pd.DataFrame(mu, columns=feat_obj_set_cols)
-    y_irl_learn = pd.Series(np.zeros(len(mu)), dtype=int)
-
+    # Set aggregator variables for the main IRL while loop
     t = []  # Errors for each iteration
     t_hold = []  # Errors on hold out set for each iteration
     mu_delta_l2norm_hist = []
@@ -810,12 +808,46 @@ def run_trial_source_domain(
     mu_best_hold_history = []
     mu_perf_best_hold_history = []
 
+    # Generate initial learned policies to serve as negative training examples
+    # for the SVM IRL classifier.
+    mu = []
+    for non_expert_algo in exp_info['NON_EXPERT_ALGOS']:
+        # Demo set
+        _mu, _demos = generate_demos_k_folds(
+            X=X_demo,
+            y=y_demo,
+            clf=expert_algo_lookup[non_expert_algo],
+            obj_set=feat_obj_set,
+            n_demos=1,
+        )
+        mu.append(_mu[0])
+
+        # Holdout set
+        _mu_hold, _demos_hold = generate_demos_k_folds(
+            X=X_demo,
+            y=y_demo,
+            clf=expert_algo_lookup[non_expert_algo],
+            obj_set=feat_obj_set,
+            n_demos=1,
+        )
+        mu_deltas_hold = _mu_hold -  muE_hold
+        mu_deltas_hold_l2norm = np.linalg.norm(mu_deltas_hold, ord=2)
+        mu_delta_l2norm_hold_hist.append(mu_deltas_hold_l2norm)
+
+    mu = np.array(mu)
+    logging.info(f"muL:\n{mu}")
+    X_irl_exp = pd.DataFrame(muE, columns=feat_obj_set_cols)
+    y_irl_exp = pd.Series(np.ones(exp_info['N_EXPERT_DEMOS']), dtype=int)
+    X_irl_learn = pd.DataFrame(mu, columns=feat_obj_set_cols)
+    y_irl_learn = pd.Series(np.zeros(len(mu)), dtype=int)
+
     # Start the IRL Loop
     logging.debug('')
     logging.debug('Starting IRL Loop ...')
 
     done = False  # When true, breaks IRL loop
     is_stuck_in_loop = False
+    irl_loop_start = datetime.datetime.now()
     while not done:
         logging.info(f"\tIRL Loop iteration {i+1}/{exp_info['MAX_ITER']} ...")
 
@@ -833,30 +865,30 @@ def run_trial_source_domain(
         try:
             allow_pos_weights = not exp_info['ALLOW_NEG_WEIGHTS']
             randomly_simluate_stuck = np.random.rand()
-            if randomly_simluate_stuck < 0 or is_stuck_in_loop:
-                is_stuck_in_loop = False
-                # Randomly sample 1 or 2 negative samples (learned policies)
-                n_samples = max(1, np.random.choice(int(np.log((i+1)**2))+1))
-                pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].index
-                neg_idx = X_irl[exp_info['N_EXPERT_DEMOS']:].sample(n_samples).index
-                _X_irl = pd.concat([X_irl.loc[pos_idx], X_irl.loc[neg_idx]])
-                _y_irl = pd.concat([y_irl.loc[pos_idx], y_irl.loc[neg_idx]])
-                logging.info(f"\t\tStuck in loop or randomized sample: sampling {n_samples} random negative demos")
-                print('Sampled IRL points for SVM')
-                irl_display = _X_irl.copy()
-                irl_display['is_expert'] = _y_irl.copy()
-                display(irl_display)
-            else:
-                _X_irl = X_irl
-                _y_irl = y_irl
-            svm = SVM(positive_weights_only=allow_pos_weights).fit(_X_irl, _y_irl)
+            # if randomly_simluate_stuck < 0 or is_stuck_in_loop:
+            #     is_stuck_in_loop = False
+            #     # Randomly sample 1 or 2 negative samples (learned policies)
+            #     n_samples = max(1, np.random.choice(int(np.log((i+1)**2))+1))
+            #     pos_idx = X_irl[0:exp_info['N_EXPERT_DEMOS']].index
+            #     neg_idx = X_irl[exp_info['N_EXPERT_DEMOS']:].sample(n_samples).index
+            #     _X_irl = pd.concat([X_irl.loc[pos_idx], X_irl.loc[neg_idx]])
+            #     _y_irl = pd.concat([y_irl.loc[pos_idx], y_irl.loc[neg_idx]])
+            #     logging.info(f"\t\tStuck in loop or randomized sample: sampling {n_samples} random negative demos")
+            #     print('Sampled IRL points for SVM')
+            #     irl_display = _X_irl.copy()
+            #     irl_display['is_expert'] = _y_irl.copy()
+            #     display(irl_display)
+            # else:
+            #     _X_irl = X_irl
+            #     _y_irl = y_irl
+            svm = SVM(positive_weights_only=allow_pos_weights).fit(X_irl, y_irl)
         except ValueError as e:
             if e.args[0] != 'No support vectors found.':
                 raise(e)
             logging.info('\t\tAllowing negative weights.')
             svm = SVM(positive_weights_only=False).fit(X_irl, y_irl)
 
-        wi = svm.weights()
+        wi = svm.weights(norm='l1')
 
         # New as of 01/07/2024
         # If weights have any negative values, renormalize the set to be
@@ -939,6 +971,7 @@ def run_trial_source_domain(
             muE,
             mu_history,
             dot_weights_feat_exp=exp_info['DOT_WEIGHTS_FEAT_EXP'],
+            svm_margin=svm.margin(),
         )
         # Do it for the hold-out set as well.
         ti_hold, best_j_hold, mu_delta_hold, mu_delta_l2norm_hold = irl_error(
@@ -946,6 +979,7 @@ def run_trial_source_domain(
             muE_hold,
             mu_hold_history,
             dot_weights_feat_exp=exp_info['DOT_WEIGHTS_FEAT_EXP'],
+            svm_margin=svm.margin(),
         )
         mu_best_history.append(mu_history[best_j])
         mu_best_hold_history.append(mu_hold_history[best_j])
@@ -979,6 +1013,12 @@ def run_trial_source_domain(
             if (exp_info['ALLOW_NEG_WEIGHTS'] or np.all(wi > -1e-5)):
                 done = True
                 break
+
+        # If error is going back up, stop
+        elif len(t) > 1 and ti > t[-2]:
+            logging.info(f"\n\nError is going back up. Stoping.")
+            done = True
+            break
         # Check if a new best error has been found in last i/2 iterations. This
         # is essentially a "smart" convervence to not waste time on more
         # iterations if it's not improving.
@@ -1006,15 +1046,24 @@ def run_trial_source_domain(
 
         # End IRL Loop
 
+    irl_loop_runtime = (
+    datetime.datetime.now() - irl_loop_start
+    ).total_seconds()
+
     # If solution not sufficient for use, exit early
-    if min(t) > exp_info['IGNORE_RESULTS_EPSILON']:
-        logging.info(f"IGNORING RESULTS BECAUSE BEST ERROR {min(t):.3f} > {exp_info['IGNORE_RESULTS_EPSILON']:.3f}")
-        return False, None, None, None, None, None, None, None
+    # if min(t) > exp_info['IGNORE_RESULTS_EPSILON']:
+    if min(mu_delta_l2norm_hist) > exp_info['IGNORE_RESULTS_EPSILON']:
+        # logging.info(f"IGNORING RESULTS BECAUSE BEST ERROR {min(t):.3f} > {exp_info['IGNORE_RESULTS_EPSILON']:.3f}")
+        logging.info(f"IGNORING RESULTS BECAUSE BEST ERROR {min(mu_delta_l2norm_hist):.3f} > {exp_info['IGNORE_RESULTS_EPSILON']:.3f}")
+        return False, None, None, None, None, None, None, None, None
 
 
     # Find best weights based on smallest error (with nonnegative weights)
     t_arg_smallest_to_largest = np.argsort(t)
-    best_iter = t_arg_smallest_to_largest[0]
+    mu_delta_l2_norm_arg_smallest_to_largest = np.argsort(mu_delta_l2norm_hist)
+    # best_iter = t_arg_smallest_to_largest[0]
+    best_iter = mu_delta_l2_norm_arg_smallest_to_largest[0]
+    print('best_iter', best_iter)
     if not exp_info['ALLOW_NEG_WEIGHTS']:
         best_t = None
         best_t_i = 0
@@ -1026,7 +1075,8 @@ def run_trial_source_domain(
                 raise ValueError('Only negative weights learned')
             best_iter = t_arg_smallest_to_largest[best_t_i]
             best_t = t[best_iter]
-            if np.all(weights[best_iter] > -1e-5) and best_t <= exp_info['IGNORE_RESULTS_EPSILON']:
+            # if np.all(weights[best_iter] > -1e-5) and best_t <= exp_info['IGNORE_RESULTS_EPSILON']:
+            if np.all(weights[best_iter] > -1e-5) and mu_delta_l2norm_hist[best_iter] <= exp_info['IGNORE_RESULTS_EPSILON']:
                 best_t_done = True
             best_t_i += 1
 
@@ -1098,12 +1148,15 @@ def run_trial_source_domain(
         ) + t_hold
     )
     df_irl['mu_delta_l2norm'] = (
-        np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'])
+        (np.inf * np.ones(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'], dtype=float))
         .tolist() + mu_delta_l2norm_hist
     )
     df_irl['mu_delta_l2norm_hold'] = (
-        np.zeros(exp_info['N_EXPERT_DEMOS']+exp_info['N_INIT_POLICIES'])
-        .tolist() + mu_delta_l2norm_hold_hist
+        (np.inf * np.ones(exp_info['N_EXPERT_DEMOS'], dtype=float)).tolist()
+        # 01/21/2024: Started recording mu_delta_l2norm_hold_hist for the
+        # initial policies since I am plotting this now for our paper.
+        # +exp_info['N_INIT_POLICIES']).tolist()
+        + mu_delta_l2norm_hold_hist
     )
     logging.debug('Experiment Summary')
     display(df_irl.round(3))
@@ -1184,7 +1237,7 @@ def run_trial_source_domain(
 
         # End regular IRL trial
 
-    return True, muE, muE_hold, muE_perf_hold, df_irl, weights, t_hold, clf_pol
+    return True, muE, muE_hold, muE_perf_hold, df_irl, weights, t_hold, clf_pol, irl_loop_runtime
 
 
 def run_behavioral_cloning_trial_source_domain(
@@ -1795,6 +1848,9 @@ def run_experiment(
     """
     logging.info(f"exp_info: {exp_info}")
 
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    logging.info(f"Experiment timestamp: {timestamp}")
+
     objectives = []
     for obj_name in exp_info['FEAT_EXP_OBJECTIVE_NAMES']:
         objectives.append(OBJ_LOOKUP_BY_NAME[obj_name]())
@@ -1810,16 +1866,28 @@ def run_experiment(
     results = []
     trial_i = 0
     target_clf_pol = None
+
     while trial_i < exp_info['N_TRIALS']:
         logging.info(f"\n\nTRIAL {trial_i}\n")
 
+        source_trial_start = datetime.datetime.now()
+
         # Run trials to learn weights on source domain
-        did_converge, muE, muE_feat_hold, muE_perf_hold, df_irl, weights, t_hold, source_clf_pol = run_trial_source_domain(
+        did_converge, muE, muE_feat_hold, muE_perf_hold, df_irl, weights, t_hold, source_clf_pol, source_irl_loop_runtime = run_trial_source_domain(
             exp_info,
             X=source_X,
             y=source_y,
             feature_types=source_feature_types,
         )
+
+        source_trial_runtime = (
+            datetime.datetime.now() - source_trial_start
+        ).total_seconds()
+
+        source_trial_inputsize = None
+        if hasattr(source_clf_pol, 'mdp'):
+            source_trial_inputsize = source_clf_pol.mdp.n_states_
+
 
         # If feature expectation error wasn't sufficiently small, skip.
         if not did_converge:
@@ -1851,12 +1919,21 @@ def run_experiment(
             muE_feat_hold,
             muE_perf_hold,
             df_irl,
+            source_trial_runtime,
+            source_irl_loop_runtime,
+            source_trial_inputsize,
             muE_target_mean,
             muE_perf_target_mean,
             muL_target_hold,
             muL_perf_target_hold,
         )
         results.append(_result)
+
+        # Persist the irl loop details so we can look at convergence
+        df_irl.to_csv(
+            f"./../../data/experiment_output/fair_irl/exp_conv_details/{timestamp}__trial{trial_i}.csv",
+            index=None,
+        )
 
         trial_i += 1
 
@@ -1866,7 +1943,6 @@ def run_experiment(
         perf_obj_set,
         results,
     )
-    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     exp_df.to_csv(
         f"./../../data/experiment_output/fair_irl/exp_results/{timestamp}.csv",
         index=None,
@@ -1909,6 +1985,8 @@ def run_behavior_clone_experiment(
     while trial_i < exp_info['N_TRIALS']:
         logging.info(f"\n\nBEHAVIOR CLONING TRIAL {trial_i}\n")
 
+        source_trial_start = datetime.datetime.now()
+
         _, muE, muE_feat_hold, muE_perf_hold, df_irl, weights, t_hold, clf = \
             run_behavioral_cloning_trial_source_domain(
                 exp_info,
@@ -1916,6 +1994,12 @@ def run_behavior_clone_experiment(
                 y=source_y,
                 feature_types=source_feature_types,
             )
+
+        source_trial_runtime = (
+            datetime.datetime.now() - source_trial_start
+        ).total_seconds()
+
+        source_trial_inputsize = None
 
         if (
              'ACSIncome__' in exp_info['DATASET'] and
@@ -1951,6 +2035,9 @@ def run_behavior_clone_experiment(
             muE_feat_hold,
             muE_perf_hold,
             df_irl,
+            source_trial_runtime,
+            None,
+            source_trial_inputsize,
             muE_target_mean,
             muE_perf_target_mean,
             muL_target_hold,
@@ -2349,7 +2436,7 @@ def plot_results_source_domain_only(
         if exp_i == perf_leg_ax:
             ax3.legend(
                 title=None,
-                ncol=1,
+                ncol=2,
                 loc='best',
                 labelspacing=.3,
                 columnspacing=.5,

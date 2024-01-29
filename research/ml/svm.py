@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns  # noqa
 from scipy import optimize
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -266,14 +267,14 @@ class SVM(BaseEstimator, ClassifierMixin):
 
         return prob
 
-    def weights(self, norm='l1'):
+    def weights(self, norm=None):
         """
         Computes the weights for each input feature. Used in IRL to infer the
         feature expectation weights. Requires that the model be fitted.
 
         Parameters
         ----------
-        norm : str, default 'l1'
+        norm : str, optional
             The norm to feed into sklearn.preprocessing.normalize to normalize
             the weights.
 
@@ -288,10 +289,27 @@ class SVM(BaseEstimator, ClassifierMixin):
         )
         weights = np.dot(self.sup_alphas_.T, sup_X_times_sup_y)
 
-        # Normalize the weights
-        weights = normalize([weights], norm=norm)[0]
+        # Normalize the weights. Don't normalize when computing the margin.
+        if norm is not None:
+            weights = normalize([weights], norm=norm)[0]
 
         return weights
+
+    def margin(self):
+        """
+        Returns the SVM margin by computing the distance between a support
+        vector and the margin.
+
+        Returns
+        ------
+        margin : float
+            The SVM margin.
+        """
+        # sv = np.array(self.sup_X_[0])  # get any support vector
+        w = np.array(self.weights(norm=None))
+        # margin = sv.dot(w) / np.linalg.norm(w, ord=2)
+        margin = 1/np.linalg.norm(w, ord=2)
+        return margin
 
     def plot_decision_boundary(self, X, y):
         """Plots H, H+, H-, as well as support vectors.
@@ -307,6 +325,12 @@ class SVM(BaseEstimator, ClassifierMixin):
         -------
         None
         """
+        if type(X) == pd.DataFrame:
+            X = np.array(X)
+
+        if np.any(X > 1):
+            raise ValueError('X must be normalized between 0 and 1')
+
         # Compute decision boundary
         y[y == 0] = -1
         _X = np.random.rand(75_000, self.sup_X_.shape[1])
@@ -317,7 +341,7 @@ class SVM(BaseEstimator, ClassifierMixin):
         Hneg = _X[np.where((np.abs(g) > -(1 + TOL))
                            & (np.abs(g) < (-1 + TOL)))]
         # Plot
-        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         C1 = X[np.where(y == 1)]
         C2 = X[np.where(y == -1)]
         ax.scatter(C1[:, 0], C1[:, 1], label='C1', marker='x')
@@ -329,8 +353,8 @@ class SVM(BaseEstimator, ClassifierMixin):
         ax.scatter(Hneg[:, 0], Hneg[:, 1], label='H-', s=5)
         ax.legend()
         ax.set_title('SVM Decision boundary')
-        ax.set_xlim([-.1, 1])
-        ax.set_ylim([-.1, 1.2])
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
         plt.show()
         return None
 
