@@ -14,8 +14,8 @@ class DiscreteMDP(gym.Env):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, state_dims, action_dims, obs_dims,
-            max_steps_per_episode, verbose=False, args={}, T=None, Osaso=None,
-            Rsas=None):
+                 max_steps_per_episode, Osaso_dtype='float64', verbose=False,
+                 args={}, T=None, Osaso=None, Rsas=None):
         """
         Generic environment for a discrete MDP. This class includes helper
         methods for computing transitions, observations, and rewards. Can also
@@ -35,6 +35,9 @@ class DiscreteMDP(gym.Env):
             episode lasts, since the environment does not end otherwise.
         verbose : bool, default False
             If True, log current state on each timestep.
+        Osaso_dtype : str, default 'float32'
+            The dtype to use for the Osaso numpy matrix, which is useful when
+            trying to reduce the RAM allocated to this martrix.
         args : dict, default {}
             Any extra parameters needed for specific environments. Useful so
             that child classes don't need to modify their __init__ method when
@@ -118,6 +121,7 @@ class DiscreteMDP(gym.Env):
 
         self.max_steps_per_episode = max_steps_per_episode
         self.verbose = verbose
+        self.Osaso_dtype = Osaso_dtype
         self.cur_episode = -1  # Set to -1 b/c reset() adds 1 to episode
         self.action_episode_memory = []
         self.observation_episode_memory = []
@@ -157,9 +161,9 @@ class DiscreteMDP(gym.Env):
                 np.array([
                     np.array([
                         self._observation_probability(s, a, sp) for sp in range(self.n_states)
-                    ]) for a in range(self.n_actions)
-                ]) for s in range(self.n_states)
-            ])
+                    ], dtype=self.Osaso_dtype) for a in range(self.n_actions)
+                ], dtype=self.Osaso_dtype) for s in range(self.n_states)
+            ], dtype=self.Osaso_dtype)
 
         if Rsas is not None:
             self.Rsas = Rsas
