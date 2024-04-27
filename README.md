@@ -1,7 +1,7 @@
 # Research
 
 ## Description
-Various implementations of existing machine learning and reinforcement learning algorithms. These algorithms are meant for personal instructive purposes and should not be used in a production setting.
+Various implementations of existing machine learning, reinforcement learning, and fairness algorithms, as well as supporting experiments. These work was completed either (a) for my PhD research (2018-2024), or for my own personal education.
 
 ## Setup
 
