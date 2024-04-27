@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import seaborn as sns  # noqa
 from scipy import optimize
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -20,6 +21,8 @@ class SVM(BaseEstimator, ClassifierMixin):
         Kernel function.
         If str, must be 'gaussian', 'linear', 'polynomial', 'sigmoid', 'tanh'.
         If function, format is function(x, y) -> float
+    positive_weights_only : bool, Optional, default False
+        If True, only positive weights allowed.
     **kernel_args
         Additional arguments to pass into kernel functions.
 
@@ -72,8 +75,9 @@ class SVM(BaseEstimator, ClassifierMixin):
     >>> svm.plot_decision_boundary(X, y)
     >>> svm.plot_discriminants(X, y)
     """
-    def __init__(self, kernel='linear', **kernel_args):
-
+    def __init__(
+            self, kernel='linear', positive_weights_only=False, **kernel_args,
+    ):
         if isinstance(kernel, str):
             kernel = KERNEL_MAP.get(kernel)(**kernel_args)
         elif not callable(kernel):
@@ -84,6 +88,7 @@ class SVM(BaseEstimator, ClassifierMixin):
             raise ValueError(msg)
 
         self.kernel = kernel
+        self.positive_weights_only = positive_weights_only
 
     def fit(self, X, y, vectorized=None):
         """Fits SVM classifer.
@@ -118,6 +123,20 @@ class SVM(BaseEstimator, ClassifierMixin):
             else:
                 vectorized = False
 
+        # 01/09/2024
+        # Trying this out. If any xi of expert (y=1) is less than the max of
+        # any corresponding xi of the learner (y=0), then change the expert's
+        # xi to the learner's max xi. This is is testing a hack which is meant
+        # to solve why this SVM can only learn positive weights when ALL of
+        # the expert's xi values are greater than all of every single learner.
+        # y1_idx = np.where(np.array(y) == 1)[0][-1]
+        # display(y1_idx)
+        # y1_xi_max = X[:y1_idx+1].max(axis=0)
+        # for x_i in range(len(X)):
+        #     for y_i in range(len(y1_xi_max)):
+        #         if y1_xi_max[y_i] < X.iloc[x_i][y_i]:
+        #             X.iloc[x_i][y_i] = y1_xi_max[y_i]
+
         # Sklearn input validation
         X, y = check_X_y(X, y)  # Check that X and y have correct shape
         self.classes_ = unique_labels(y)  # Store the classes seen during fit
@@ -137,6 +156,9 @@ class SVM(BaseEstimator, ClassifierMixin):
         # Our constraints:
         #     1. sum_i(ai*yi)=0
         #     2. ai >= 0
+        #     3. Positive weights only constraint:
+        #        for all j:
+        #            sum_i( X[i][j]*y[i] * a[i] >= 0 )
         #
         # Scipy LinearConstraint format:
         #    lb <= A.dot(x) <= ub
@@ -150,14 +172,42 @@ class SVM(BaseEstimator, ClassifierMixin):
         #         A = 1
         #         lb = 0
         #         ub = np.inf
+        #     Positive weights only constraint:
+        #         A = X[:, j] * y
+        #         lb = zero
+        #         ub = np.inf
         #
-        con1 = optimize.LinearConstraint(y, 0, 0)
+        con1 = optimize.LinearConstraint(A=y, lb=0, ub=0)
         con2 = {'type': 'ineq', 'fun': lambda a: a}
+
+        if not self.positive_weights_only:
+            constraints = (con1, con2)
+        else:
+            # Force weights to be positive
+            pos_weight_constraints = []
+
+            for j in range(X.shape[1]):
+                con = optimize.LinearConstraint(
+                    (
+                        (X[:,j].reshape(len(X), 1) * y.reshape(len(y), 1))
+                        .reshape(len(X))
+                    ),
+                    0,
+                    np.inf,
+                )
+                pos_weight_constraints.append(con)
+
+            constraints = (con1, con2) + tuple(pos_weight_constraints)
+
         self.opt_result_ = optimize.minimize(loss, initial_alphas,
-                                             constraints=(con1, con2),
+                                             constraints=constraints,
                                              args=(X, y))
         # Find indices of support vectors
         sup_idx = np.where(self.opt_result_.x > 0.001)
+
+        if len(sup_idx[0]) == 0:
+            raise ValueError('No support vectors found.')
+
         self.sup_idx_ = sup_idx
         self.sup_X_ = X[sup_idx]
         self.sup_y_ = y[sup_idx]
@@ -217,10 +267,16 @@ class SVM(BaseEstimator, ClassifierMixin):
 
         return prob
 
-    def weights(self):
+    def weights(self, norm=None):
         """
         Computes the weights for each input feature. Used in IRL to infer the
         feature expectation weights. Requires that the model be fitted.
+
+        Parameters
+        ----------
+        norm : str, optional
+            The norm to feed into sklearn.preprocessing.normalize to normalize
+            the weights.
 
         Returns
         -------
@@ -228,16 +284,32 @@ class SVM(BaseEstimator, ClassifierMixin):
         """
         check_is_fitted(self, ['opt_result_', 'sup_idx_', 'sup_X_', 'sup_y_',
                                'sup_alphas_', 'offset_'])
-        sup_X_ = np.array(self.sup_X_)
-        for i in range(len(self.sup_y_)):
-            sup_X_[i] *= self.sup_y_[i]
+        sup_X_times_sup_y = (
+            np.array(self.sup_X_) * self.sup_y_.reshape(len(self.sup_y_), 1)
+        )
+        weights = np.dot(self.sup_alphas_.T, sup_X_times_sup_y)
 
-        weights = np.dot(self.sup_alphas_.T, sup_X_)
-
-        # Normalize the weights
-        weights = normalize([weights], norm='l1')[0]
+        # Normalize the weights. Don't normalize when computing the margin.
+        if norm is not None:
+            weights = normalize([weights], norm=norm)[0]
 
         return weights
+
+    def margin(self):
+        """
+        Returns the SVM margin by computing the distance between a support
+        vector and the margin.
+
+        Returns
+        ------
+        margin : float
+            The SVM margin.
+        """
+        # sv = np.array(self.sup_X_[0])  # get any support vector
+        w = np.array(self.weights(norm=None))
+        # margin = sv.dot(w) / np.linalg.norm(w, ord=2)
+        margin = 1/np.linalg.norm(w, ord=2)
+        return margin
 
     def plot_decision_boundary(self, X, y):
         """Plots H, H+, H-, as well as support vectors.
@@ -253,6 +325,12 @@ class SVM(BaseEstimator, ClassifierMixin):
         -------
         None
         """
+        if type(X) == pd.DataFrame:
+            X = np.array(X)
+
+        if np.any(X > 1):
+            raise ValueError('X must be normalized between 0 and 1')
+
         # Compute decision boundary
         y[y == 0] = -1
         _X = np.random.rand(75_000, self.sup_X_.shape[1])
@@ -263,7 +341,7 @@ class SVM(BaseEstimator, ClassifierMixin):
         Hneg = _X[np.where((np.abs(g) > -(1 + TOL))
                            & (np.abs(g) < (-1 + TOL)))]
         # Plot
-        fig, ax = plt.subplots(1, 1, figsize=(10, 7))
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
         C1 = X[np.where(y == 1)]
         C2 = X[np.where(y == -1)]
         ax.scatter(C1[:, 0], C1[:, 1], label='C1', marker='x')
@@ -275,8 +353,8 @@ class SVM(BaseEstimator, ClassifierMixin):
         ax.scatter(Hneg[:, 0], Hneg[:, 1], label='H-', s=5)
         ax.legend()
         ax.set_title('SVM Decision boundary')
-        ax.set_xlim([-.1, 1])
-        ax.set_ylim([-.1, 1.2])
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1])
         plt.show()
         return None
 

@@ -8,8 +8,8 @@ from research.rl.env.discrete_mdp import DiscreteMDP, compute_optimal_policy
 class MultiObjectiveDiscreteMDP(DiscreteMDP):
 
     def __init__(self, state_dims, action_dims, obs_dims,
-                 max_steps_per_episode, verbose=False, args={},
-                 obj_weights=np.array([1, 0, 0]), T=None, Osaso=None,
+                 max_steps_per_episode, Osaso_dtype='float64', verbose=False,
+                 args={}, obj_weights=np.array([1, 0, 0]), T=None, Osaso=None,
                  Rsas=None):
         """
         Additional Parameters beyond DiscreteMDPs
@@ -36,8 +36,8 @@ class MultiObjectiveDiscreteMDP(DiscreteMDP):
         self.moo_reward_episode_memory = []
 
         super().__init__(state_dims, action_dims, obs_dims,
-                         max_steps_per_episode, verbose, args, T=T,
-                         Osaso=Osaso, Rsas=Rsas)
+                         max_steps_per_episode, Osaso_dtype,
+                         verbose, args, T=T, Osaso=Osaso, Rsas=Rsas)
 
         # Build multi-objective reward matrix Rsasl from injected method
         larr = np.arange(self.n_objectives)

@@ -6,7 +6,7 @@ channels:
   - akode
 dependencies:
   - fairlearn
-  # - gym
+  - gym
   - imbalanced-learn
   - ipykernel
   - jupyter
@@ -16,14 +16,16 @@ dependencies:
   - pandas
   # - pandas-profiling
   - pip
-  - scikit-learn
-  - seaborn
+  - scikit-learn>=1.3
+  - seaborn>=0.13.0
   # - setuptools>=40.6.3
   - tabulate
   - tempeh
   # - tqdm
   # - twine
+  - xgboost
   - pip:
+    - folktables
     # - tensorflow==1.14.0
     # - setuptools==40.6.3
     # - git+https://github.com/jackblandin/gym-tiger.git  # Use when not env is stable

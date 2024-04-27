@@ -3,19 +3,15 @@ import numpy as np
 import os
 import pandas as pd
 from research.rl.env.clf_mdp import *
+from research.rl.env.clf_mdp_policy import *
+from research.rl.env.objectives import *
 from research.utils import *
-from sklearn.compose import ColumnTransformer
-from sklearn.feature_selection import SelectPercentile, chi2
-from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split, KFold
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import KBinsDiscretizer, OneHotEncoder
-from sklearn.utils.validation import check_is_fitted
 
 
 def compute_optimal_policy(
     clf_df, clf, x_cols, obj_set, reward_weights, skip_error_terms=False,
-    method='highs', gamma = 1e-6,
+    method='highs', gamma = 1e-9, min_freq_fill_pct=0, restrict_y=True,
 ):
     """
     Learns the optimal policies from the provided reward weights.
@@ -52,10 +48,16 @@ def compute_optimal_policy(
         The MDP discount factor. Should be close to zero since this is a
         classification mdp, but cannot be zero exactly otherwise the linear
         program won't converge.
+    min_freq_fill_pct, float, range[0, 1), default 0
+        Minimum frequency for each input variable to not get replaced by a
+        default value.
+    restrict_y : bool, deafult True
+        If True, policy must have same action for any x,z combo, regardless
+        of y.
 
     Returns
     -------
-    opt_pol : list<np.array<int>>
+    opt_pol : research.rl.env.clf_mdp.ClassificationMDPPolicy
         The optimal policy. If there are multiple, it randomly selects one.
     """
     clf_mdp = ClassificationMDP(
@@ -63,11 +65,15 @@ def compute_optimal_policy(
         obj_set=obj_set,
         x_cols=x_cols,
     )
+
     # Construct the mdp, including optimization problems
     clf_mdp.fit(
         reward_weights=reward_weights,
         clf_df=clf_df,
+        min_freq_fill_pct=min_freq_fill_pct,
+        restrict_y=restrict_y,
     )
+
     # Compute the optimal policy(s). This does NOT fit the classifier that
     # predicts Y from Z, X. That occurs on the generate_demo() call. This
     # `compute_optimal_policies` computes the optimal policy, assuming the
@@ -76,7 +82,9 @@ def compute_optimal_policy(
         skip_error_terms=skip_error_terms,
         method=method,
     )
+
     # Pick from one of the policies (if there are multiple).
+    logging.info(f"\n\t\tFound {len(optimal_policies)} optimal policies.")
     sampled_policy = optimal_policies[np.random.choice(len(optimal_policies))]
 
     clf_pol = ClassificationMDPPolicy(
@@ -84,6 +92,7 @@ def compute_optimal_policy(
         pi=sampled_policy,
         clf=clf,
     )
+
     return clf_pol
 
 
@@ -113,7 +122,10 @@ def generate_demo(clf, X_test, y_test, can_observe_y=False):
 
     if can_observe_y:
         # yhat = clf.predict(X_test, y_test)
-        demo['yhat'] = demo['y'].copy()
+        if 'y' in X_test.columns:
+            demo['yhat'] = demo['y'].copy()
+        else:
+            demo['yhat'] = y_test
     else:
         demo['yhat'] = clf.predict(X_test)
 
@@ -198,7 +210,9 @@ def generate_demos_k_folds( X, y, clf, obj_set, n_demos=3):
     return mu, demos
 
 
-def irl_error(w, muE, muL, norm_weights=False):
+def irl_error(
+        w, muE, muL, dot_weights_feat_exp=True, allow_neg_weights=False, svm_margin=None,
+):
     """
     Computes t[i] = argmax_{mu[j] for j in muL} wT(muE-mu[j])
 
@@ -210,8 +224,17 @@ def irl_error(w, muE, muL, norm_weights=False):
         Array of all expert feature expectations.
     muL : array-like<array-like<float>>
         List of all learned feature expectations.
-    norm_weights : bool, default False
-        If true, divides the error by the l2 norm of the weights.
+    dot_weights_feat_exp : bool, default True
+        If True, error = l2_norm( (muE - muL).dot(w) )
+        If False, error = l2_norm(muE - muL) * l2_norm(w)
+        The default value is the typical IRL one. Use the other if all feat
+        exp should be non-zero weights. Helps avoid issue of IRL nulling out
+        feat exp componets that it has trouble matching.
+    allow_neg_weights : bool, default False
+        If True, allows positive feature expectation errors to be nulled out
+        even if weights are negative.
+    svm_margin : float, optional
+        If provided, use this for error.
 
     Returns
     -------
@@ -224,79 +247,72 @@ def irl_error(w, muE, muL, norm_weights=False):
     l2_mu_delta[best_j] : float
         The l2 norm of the muE and muL deltas.
     """
-    mu_deltas = np.zeros((len(muL), muE.shape[1]))
-    l2_mu_deltas = np.zeros(len(muL))
+    # mu_deltas = np.zeros((len(muL), muE.shape[1]))
+    # l2_mu_deltas = np.zeros(len(muL))
+    # best_err = np.inf
+    # best_j = None
+
+    # # Find best muj
+    # for j, muj in enumerate(muL):
+    #     # JDB 01/07/2024
+    #     # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
+    #     # adding the muE.mean(axis=0) as a denominator
+    #     mu_deltas[j] = muE.mean(axis=0) - muj
+    #     # JDB 12/05/2023
+    #     # Trying this out. If muj is better, reduce the amount it's considered
+    #     # as an error for feature expectations deltas.
+    #     # But first, check if all weights are positive. Don't want anything
+    #     # to converge to zero error if weights are negative.
+    #     if allow_neg_weights or  np.all(w > -1e-5):
+    #         mu_deltas[j][mu_deltas[j] < 0] = 1 * mu_deltas[j][mu_deltas[j] < 0]
+
+    #     if dot_weights_feat_exp:
+    #         err = np.linalg.norm(np.abs(w) * mu_deltas[j], ord=2)
+    #     else:
+    #         err = np.linalg.norm(np.abs(mu_deltas[j])) * np.linalg.norm(w, ord=2)
+
+    #     if err < best_err:
+    #         best_err = err
+    #         best_j = j
+
+    # 01/08/2024
+    # Trying this out: don't find best muj. Just compute error with most recent
+    # muj and weights.
+    l2_mu_deltas = np.zeros([])
     best_err = np.inf
-    best_j = None
-
-    # Find best muj
-    for j, muj in enumerate(muL):
-        mu_deltas[j] = muE.mean(axis=0) - muj
-        err = np.linalg.norm(w * mu_deltas[j])
-        if norm_weights:
-            l2_w = np.linalg.norm(w)
-            err = err / l2_w
-        if err < best_err:
-            best_err = err
-            best_j = j
-
-    return best_err, best_j, mu_deltas[best_j], l2_mu_deltas[best_j]
+    best_j = len(muL) - 1
 
 
-def sklearn_clf_pipeline(feature_types, clf_inst):
-    """
-    Utility method for constructing sklearn classifier pipeline, which in this
-    case corresponds to a demonstration (X, yhat, y). The input clf_inst
-    doesn't need to be a sklearn classifier, but does need to adhere to the
-    sklearn.base.BaseEstimator/ClassifierMixin paradigm.
+    # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
+    # adding the muE.mean(axis=0) as a denominator
+    mu_deltas = (muE.mean(axis=0) - muL[-1]) / muE.mean(axis=0)
 
-    Parameters
-    ----------
-    feature_types : dict<str, list>
-        Specifies which type of feature each column is; used for feature
-        engineering. Keys are feature types ('boolean', 'categoric',
-        'continuous', 'meta'). Values are lists of the columns with that
-        feature type.
-    clf_inst : sklearn.base.BaseEstimator, ClassifierMixin
-        Sklearn classifier instance. E.g. `RandomForestClassifier()`.
+    # JDB 01/20/2024
+    # Trying this out: use SVM hyperplane margin as error
+    if svm_margin is not None:
+        err = svm_margin
+    else:
 
-    Returns
-    -------
-    pipe : sklearn.pipeilne.Pipeline
-        scikit-learn pipeline.
-    """
-    numeric_trf = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ('kbins', KBinsDiscretizer(
-                n_bins=3, encode='ordinal', strategy='uniform')),
-        ]
-    )
-    categoric_trf = Pipeline(
-        steps=[
-            ("encoder", OneHotEncoder(handle_unknown="ignore")),
-            ("selector", SelectPercentile(chi2, percentile=50)),
-        ]
-    )
-    transformers = []
+        # JDB 01/07/2024
+        # Trying this out. Make mu delta errors RELATIVE to their magnitude. So
+        # adding the muE.mean(axis=0) as a denominator
+        if allow_neg_weights or  np.all(w > -1e-5):
+            mu_deltas[mu_deltas < 0] = 1 * mu_deltas[mu_deltas < 0]
 
-    if len(feature_types['continuous']) > 0:
-        transformers.append(("num", numeric_trf, feature_types['continuous']))
+        if dot_weights_feat_exp:
+            err = np.linalg.norm(w * mu_deltas, ord=2)
+        else:
+            err = np.linalg.norm(mu_deltas) * np.linalg.norm(w, ord=2)
 
-    if len(feature_types['categoric']) > 0:
-        transformers.append(("cat", categoric_trf, feature_types['categoric']))
+    best_err = err
 
-    if len(feature_types['boolean']) > 0:
-        transformers.append(('bool', categoric_trf, feature_types['boolean']))
+    # If accuracy weight is zero, return infinite error
+    # TODO: remove this
+    if np.allclose(w[0], 0, atol=1e-5):
+        logging.info('\t\tAccuracy weight is zero, infinite error')
+        best_err = np.inf
 
-    preprocessor = ColumnTransformer(
-        transformers=transformers,
-        sparse_threshold=.000001,
-    )
-    pipe = Pipeline(
-        steps=[
-            ("preprocessor", preprocessor),
-            ("classifier", clf_inst),
-        ],
-    )
-    return pipe
+
+    l2_mu_deltas = np.linalg.norm(mu_deltas, ord=2)
+
+    return best_err, best_j, mu_deltas, l2_mu_deltas
